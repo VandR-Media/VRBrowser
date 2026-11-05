@@ -46,8 +46,20 @@ class MainActivity : Activity() {
    val action: () -> Unit = when(i) { 0->{ { active().takeIf{it.canGoBack()}?.goBack() } }; 1->{ { active().takeIf{it.canGoForward()}?.goForward() } }; 2->{ { addTab("https://www.google.com") } }; 3->{ { showTabs() } }; 4->{ { showBookmarks() } }; 5->{ { showMedia() } }; else->{ { showMenu() } } }
    bottom.addView(button(s,action),LinearLayout.LayoutParams(0,dp(54),1f))
   }
-  shield.updateIfDue()
-  addTab("https://www.google.com")
+  // A failed WebView initialization should not terminate the entire app.
+  try {
+   addTab("https://www.google.com")
+  } catch (error: Throwable) {
+   getSharedPreferences("diagnostics", MODE_PRIVATE).edit()
+    .putString("last_crash", android.util.Log.getStackTraceString(error).take(18000)).apply()
+   status.text = "Не удалось запустить WebView"
+   AlertDialog.Builder(this).setTitle("Ошибка запуска WebView")
+    .setMessage("Открой диагностику и скопируй отчёт.")
+    .setPositiveButton("Диагностика") { _, _ -> startActivity(Intent(this, DiagnosticActivity::class.java)) }
+    .setNegativeButton("Закрыть", null).show()
+  }
+  try { shield.updateIfDue() } catch (_: Exception) { }
+
  }
  private fun dp(n:Int)=(n*resources.displayMetrics.density).toInt()
  private fun active()=tabs[current]
@@ -92,8 +104,8 @@ class MainActivity : Activity() {
  }
  private fun showTabs() { AlertDialog.Builder(this).setTitle("Вкладки").setItems(tabs.mapIndexed { i,v -> "${i+1}. ${(v.title?:v.url?:"Новая вкладка").take(55)}" }.toTypedArray()) { _,i -> switchTab(i) }.setPositiveButton("Новая") { _,_->addTab("https://www.google.com") }.setNeutralButton("Закрыть текущую") { _,_-> if(tabs.size>1) { val old=active(); tabs.removeAt(current); pages.removeView(old); old.destroy(); switchTab(tabs.lastIndex) } }.show() }
  private fun showBookmarks() { val list=bookmarks; AlertDialog.Builder(this).setTitle("Закладки").setItems(list.toTypedArray()) { _,i -> navigate(list[i]) }.setPositiveButton("Добавить текущую") { _,_-> val u=active().url; if(u!=null){ list.remove(u); list.add(u); writeList("bookmarks",list) } }.setNegativeButton("Закрыть",null).show() }
- private fun showMenu() { val choices=arrayOf("История","Библиотека загрузок","Обновить","Очистить историю","Очистить данные сайтов","V&R Shield")
-  AlertDialog.Builder(this).setItems(choices) { _,i -> when(i) { 0->{ val h=history.reversed(); AlertDialog.Builder(this).setTitle("История").setItems(h.toTypedArray()) { _,j -> navigate(h[j]) }.show() }; 1->startActivity(Intent(this, LibraryActivity::class.java)); 2->active().reload(); 3->writeList("history",emptyList()); 5->showShield(); 4->AlertDialog.Builder(this).setMessage("Удалить cookies и кэш браузера?").setPositiveButton("Удалить") { _,_->CookieManager.getInstance().removeAllCookies(null); tabs.forEach{it.clearCache(true)} }.setNegativeButton("Отмена",null).show() } }.show()
+ private fun showMenu() { val choices=arrayOf("История","Библиотека загрузок","Обновить","Очистить историю","Очистить данные сайтов","V&R Shield","Диагностика")
+  AlertDialog.Builder(this).setItems(choices) { _,i -> when(i) { 0->{ val h=history.reversed(); AlertDialog.Builder(this).setTitle("История").setItems(h.toTypedArray()) { _,j -> navigate(h[j]) }.show() }; 1->startActivity(Intent(this, LibraryActivity::class.java)); 2->active().reload(); 3->writeList("history",emptyList()); 5->showShield(); 6->startActivity(Intent(this, DiagnosticActivity::class.java)); 4->AlertDialog.Builder(this).setMessage("Удалить cookies и кэш браузера?").setPositiveButton("Удалить") { _,_->CookieManager.getInstance().removeAllCookies(null); tabs.forEach{it.clearCache(true)} }.setNegativeButton("Отмена",null).show() } }.show()
  }
  private fun showShield() {
   val modes=arrayOf("Выключен", "Сбалансированный", "Строгий")
