@@ -37,7 +37,7 @@ jobs:
           cp /tmp/vr-update/settings.gradle.kts .
           cp /tmp/vr-update/gradle.properties .
 
-          sed -i 's#android.permission/POST_NOTIFICATIONS#android.permission.POST_NOTIFICATIONS#g' app/src/main/AndroidManifest.xml
+          sed -i 's/V&R Диагностика/V\&amp;R Диагностика/g' app/src/main/AndroidManifest.xml
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
