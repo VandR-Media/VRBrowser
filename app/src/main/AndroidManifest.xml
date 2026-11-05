@@ -1,7 +1,10 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
  <uses-permission android:name="android.permission.INTERNET"/>
  <uses-permission android:name="android.permission/POST_NOTIFICATIONS"/>
- <application android:label="V&amp;R Browser" android:theme="@android:style/Theme.Material.NoActionBar" android:usesCleartextTraffic="false" android:allowBackup="false">
+ <application android:name=".BrowserApp" android:label="V&amp;R Browser" android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher" android:theme="@android:style/Theme.Material.NoActionBar" android:usesCleartextTraffic="false" android:allowBackup="false">
+  <activity android:name=".DiagnosticActivity" android:exported="true" android:label="V&R Диагностика">
+   <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
+  </activity>
   <activity android:name=".PlayerActivity" android:exported="false"/>
   <activity android:name=".LibraryActivity" android:exported="false"/>
   <activity android:name=".MainActivity" android:exported="true" android:configChanges="orientation|screenSize|keyboardHidden">
