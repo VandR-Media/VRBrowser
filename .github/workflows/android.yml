@@ -19,7 +19,7 @@ jobs:
 
       - name: Extract V&R Browser 0.3.1
         run: |
-          ARCHIVE="VRBrowser-0.3.1-REPACK.zip"
+          ARCHIVE="VRBrowser-0.3.2-FIXED.zip"
 
           if [ ! -f "$ARCHIVE" ]; then
             echo "Update archive not found!"
