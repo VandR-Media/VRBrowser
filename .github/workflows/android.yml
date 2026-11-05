@@ -32,7 +32,12 @@ jobs:
 
           rm -rf app
           cp -a /tmp/vr-update/app ./app
+cp app/src/main/java/com/vrbrowser/app/Shield.kt /tmp/Shield-fixed.kt
 
+rm -rf app
+cp -a /tmp/vr-update/app ./app
+
+cp /tmp/Shield-fixed.kt app/src/main/java/com/vrbrowser/app/Shield.kt
           cp /tmp/vr-update/build.gradle.kts .
           cp /tmp/vr-update/settings.gradle.kts .
           cp /tmp/vr-update/gradle.properties .
