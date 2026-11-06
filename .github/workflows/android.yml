@@ -1,4 +1,4 @@
-name: Build V&R Browser 0.9
+name: Build V&R Browser 0.9 (APK version verified)
 
 on:
   workflow_dispatch:
@@ -62,20 +62,52 @@ jobs:
           VR_KEY_ALIAS: ${{ secrets.VR_KEY_ALIAS }}
           VR_KEY_PASSWORD: ${{ secrets.VR_KEY_PASSWORD }}
         run: gradle --no-daemon :app:assembleRelease
+      - name: Verify signed Release APK metadata
+        if: steps.signing.outputs.enabled == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="$(find app/build/outputs/apk/release -maxdepth 1 -name '*.apk' -print -quit)"
+          test -n "$APK"
+          AAPT="$ANDROID_HOME/build-tools/35.0.0/aapt"
+          META="$("$AAPT" dump badging "$APK" | head -n 1)"
+          echo "$META"
+          [[ "$META" == *"name='com.vrbrowser.app'"* ]]
+          [[ "$META" == *"versionCode='900'"* ]]
+          [[ "$META" == *"versionName='0.9'"* ]]
+          mkdir -p verified-apk
+          cp "$APK" verified-apk/VRBrowser-0.9-release-signed.apk
+          sha256sum verified-apk/*.apk
       - name: Upload signed Release APK
         if: steps.signing.outputs.enabled == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: VRBrowser-0.9-signed-release
-          path: app/build/outputs/apk/release/*.apk
+          path: verified-apk/VRBrowser-0.9-release-signed.apk
           if-no-files-found: error
       - name: Build Debug APK (fallback)
         if: steps.signing.outputs.enabled != 'true'
         run: gradle --no-daemon :app:assembleDebug
+      - name: Verify Debug APK metadata
+        if: steps.signing.outputs.enabled != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="$(find app/build/outputs/apk/debug -maxdepth 1 -name '*.apk' -print -quit)"
+          test -n "$APK"
+          AAPT="$ANDROID_HOME/build-tools/35.0.0/aapt"
+          META="$("$AAPT" dump badging "$APK" | head -n 1)"
+          echo "$META"
+          [[ "$META" == *"name='com.vrbrowser.app'"* ]]
+          [[ "$META" == *"versionCode='900'"* ]]
+          [[ "$META" == *"versionName='0.9'"* ]]
+          mkdir -p verified-apk
+          cp "$APK" verified-apk/VRBrowser-0.9-debug-verified.apk
+          sha256sum verified-apk/*.apk
       - name: Upload Debug APK (fallback)
         if: steps.signing.outputs.enabled != 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: VRBrowser-0.9-debug
-          path: app/build/outputs/apk/debug/*.apk
+          name: VRBrowser-0.9-debug-verified
+          path: verified-apk/VRBrowser-0.9-debug-verified.apk
           if-no-files-found: error
