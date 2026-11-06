@@ -1,68 +1,81 @@
-name: Build VRBrowser APK
+name: Build V&R Browser 0.9
+
 on:
   workflow_dispatch:
   push:
     branches: [main]
+
+permissions:
+  contents: read
+
 jobs:
   build:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Java 17
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
-      - uses: gradle/actions/setup-gradle@v4
+      - name: Gradle 8.11.1
+        uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.11.1'
-      - name: Configure Android SDK
+      - name: Install Android SDK 35
         shell: bash
         run: |
-          set -e
-          SDKMANAGER=$(find "$ANDROID_HOME" -type f -name sdkmanager -print -quit)
+          set -euo pipefail
+          SDKMANAGER="$(find "$ANDROID_HOME" -type f -name sdkmanager -print -quit)"
           test -n "$SDKMANAGER"
-          "$SDKMANAGER" --install "platform-tools" "platforms;android-35" "build-tools;35.0.0"
-      - name: Check signing secrets
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" --install 'platforms;android-35' 'build-tools;35.0.0' 'platform-tools'
+      - name: Check release signing secrets
         id: signing
+        shell: bash
         env:
-          KEYSTORE: ${{ secrets.VR_KEYSTORE_BASE64 }}
-          STORE_PASS: ${{ secrets.VR_KEYSTORE_PASSWORD }}
-          KEY_PASS: ${{ secrets.VR_KEY_PASSWORD }}
+          KEYSTORE_BASE64: ${{ secrets.VR_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.VR_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.VR_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.VR_KEY_PASSWORD }}
         run: |
-          if [ -n "$KEYSTORE" ] && [ -n "$STORE_PASS" ] && [ -n "$KEY_PASS" ]; then
-            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          if [[ -n "$KEYSTORE_BASE64" && -n "$KEYSTORE_PASSWORD" && -n "$KEY_ALIAS" && -n "$KEY_PASSWORD" ]]; then
+            echo 'enabled=true' >> "$GITHUB_OUTPUT"
           else
-            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo 'enabled=false' >> "$GITHUB_OUTPUT"
+            echo 'Release signing secrets missing: building debug APK only.'
           fi
-      - name: Restore persistent release signing key
+      - name: Restore persistent signing key
         if: steps.signing.outputs.enabled == 'true'
+        shell: bash
         env:
-          KEYSTORE: ${{ secrets.VR_KEYSTORE_BASE64 }}
-        run: printf '%s' "$KEYSTORE" | base64 -d > app/vrbrowser-signing.jks
+          KEYSTORE_BASE64: ${{ secrets.VR_KEYSTORE_BASE64 }}
+        run: |
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/vrbrowser-signing.jks"
+          chmod 600 "$RUNNER_TEMP/vrbrowser-signing.jks"
       - name: Build signed Release APK
         if: steps.signing.outputs.enabled == 'true'
         env:
-          VR_KEYSTORE_PATH: vrbrowser-signing.jks
+          VR_KEYSTORE_PATH: ${{ runner.temp }}/vrbrowser-signing.jks
           VR_KEYSTORE_PASSWORD: ${{ secrets.VR_KEYSTORE_PASSWORD }}
-          VR_KEY_ALIAS: ${{ secrets.VR_KEY_ALIAS || 'vrbrowser' }}
+          VR_KEY_ALIAS: ${{ secrets.VR_KEY_ALIAS }}
           VR_KEY_PASSWORD: ${{ secrets.VR_KEY_PASSWORD }}
-        run: gradle --no-daemon assembleDebug --stacktrace --info
-      - name: Build Debug APK (fallback)
-        if: steps.signing.outputs.enabled != 'true'
-        run: gradle --no-daemon assembleDebug
+        run: gradle --no-daemon :app:assembleRelease
       - name: Upload signed Release APK
         if: steps.signing.outputs.enabled == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: VRBrowser-signed-release-apk
+          name: VRBrowser-0.9-signed-release
           path: app/build/outputs/apk/release/*.apk
           if-no-files-found: error
-      - name: Upload Debug APK
+      - name: Build Debug APK (fallback)
+        if: steps.signing.outputs.enabled != 'true'
+        run: gradle --no-daemon :app:assembleDebug
+      - name: Upload Debug APK (fallback)
         if: steps.signing.outputs.enabled != 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: VRBrowser-debug-apk
+          name: VRBrowser-0.9-debug
           path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
