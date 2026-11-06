@@ -25,10 +25,10 @@ jobs:
           SDKMANAGER=$(find "$ANDROID_HOME" -type f -name sdkmanager -print -quit)
           test -n "$SDKMANAGER"
           "$SDKMANAGER" --install "platform-tools" "platforms;android-35" "build-tools;35.0.0"
-      - name: Unpack V&R Browser 0.6.1
+      - name: Unpack V&R Browser 0.6.2
         run: |
-          mkdir -p vrbrowser061
-          unzip -q VRBrowser061.zip -d vrbrowser061
+          mkdir -p vrbrowser062
+          unzip -q VRBrowser062.zip -d vrbrowser062
       - name: Restore private signing key
         env:
           VR_KEYSTORE_B64: ${{ secrets.VR_KEYSTORE_B64 }}
@@ -37,7 +37,7 @@ jobs:
           printf '%s' "$VR_KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/vrbrowser-signing.jks"
           test -s "$RUNNER_TEMP/vrbrowser-signing.jks"
       - name: Build signed Release APK
-        working-directory: vrbrowser061
+        working-directory: vrbrowser062
         env:
           VR_KEYSTORE_PASSWORD: ${{ secrets.VR_KEYSTORE_PASSWORD }}
           VR_KEY_ALIAS: ${{ secrets.VR_KEY_ALIAS }}
@@ -48,6 +48,6 @@ jobs:
       - name: Upload signed APK
         uses: actions/upload-artifact@v4
         with:
-          name: VRBrowser-061-signed-apk
-          path: vrbrowser061/app/build/outputs/apk/release/*.apk
+          name: VRBrowser-062-signed-apk
+          path: vrbrowser062/app/build/outputs/apk/release/*.apk
           if-no-files-found: error
