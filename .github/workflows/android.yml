@@ -1,58 +1,50 @@
-name: Build VRBrowser APK
-
+name: Build VRBrowser 0.6 signed APK
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
-
+    branches: [main]
 jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Java 17
-        uses: actions/setup-java@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
-
-      - name: Set up Gradle 8.11.1
-        uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.11.1'
-
       - name: Install Android SDK 35
         shell: bash
         run: |
           set -euo pipefail
           SDKMANAGER=$(find "$ANDROID_HOME" -type f -name sdkmanager -print -quit)
-          test -n "$SDKMANAGER"
           yes | "$SDKMANAGER" --licenses >/dev/null || true
           "$SDKMANAGER" --install "platform-tools" "platforms;android-35" "build-tools;35.0.0"
-
-      - name: Extract V&R Browser 0.5 source
-        shell: bash
+      - name: Extract sources
         run: |
-          set -euo pipefail
-          test -f VRBrowser05.zip
-          mkdir -p vrbrowser05
-          unzip -q VRBrowser05.zip -d vrbrowser05
-          test -f vrbrowser05/settings.gradle.kts
-          test -f vrbrowser05/app/build.gradle.kts
-
-      - name: Build Debug APK
-        working-directory: vrbrowser05
-        run: gradle --no-daemon assembleDebug
-
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
+          mkdir -p vrbrowser06
+          unzip -q VRBrowser06.zip -d vrbrowser06
+          test -f vrbrowser06/app/build.gradle.kts
+      - name: Restore private signing key
+        env:
+          KEYSTORE_B64: ${{ secrets.VR_KEYSTORE_B64 }}
+        run: |
+          test -n "$KEYSTORE_B64" || { echo 'Missing VR_KEYSTORE_B64 secret'; exit 1; }
+          printf '%s' "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/vrbrowser-signing.jks"
+      - name: Build signed release APK
+        working-directory: vrbrowser06
+        env:
+          VR_KEYSTORE_PATH: ${{ runner.temp }}/vrbrowser-signing.jks
+          VR_KEYSTORE_PASSWORD: ${{ secrets.VR_KEYSTORE_PASSWORD }}
+          VR_KEY_ALIAS: ${{ secrets.VR_KEY_ALIAS }}
+          VR_KEY_PASSWORD: ${{ secrets.VR_KEY_PASSWORD }}
+        run: gradle --no-daemon assembleRelease
+      - uses: actions/upload-artifact@v4
         with:
-          name: VRBrowser-0.5-debug-apk
-          path: vrbrowser05/app/build/outputs/apk/debug/*.apk
+          name: VRBrowser-0.6-signed-apk
+          path: vrbrowser06/app/build/outputs/apk/release/*.apk
           if-no-files-found: error
