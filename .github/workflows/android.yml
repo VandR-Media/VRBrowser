@@ -1,16 +1,13 @@
 name: Build VRBrowser APK
-
 on:
   workflow_dispatch:
   push:
     branches: [main]
-
-permissions:
-  contents: read
-
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -20,34 +17,52 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.11.1'
-      - name: Install Android SDK 35
+      - name: Configure Android SDK
+        shell: bash
         run: |
+          set -e
           SDKMANAGER=$(find "$ANDROID_HOME" -type f -name sdkmanager -print -quit)
           test -n "$SDKMANAGER"
           "$SDKMANAGER" --install "platform-tools" "platforms;android-35" "build-tools;35.0.0"
-      - name: Unpack V&R Browser 0.7
-        run: |
-          mkdir -p vrbrowser07
-          unzip -q VRBrowser07.zip -d vrbrowser07
-      - name: Restore private signing key
+      - name: Check signing secrets
+        id: signing
         env:
-          VR_KEYSTORE_B64: ${{ secrets.VR_KEYSTORE_B64 }}
+          KEYSTORE: ${{ secrets.VR_KEYSTORE_BASE64 }}
+          STORE_PASS: ${{ secrets.VR_KEYSTORE_PASSWORD }}
+          KEY_PASS: ${{ secrets.VR_KEY_PASSWORD }}
         run: |
-          test -n "$VR_KEYSTORE_B64"
-          printf '%s' "$VR_KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/vrbrowser-signing.jks"
-          test -s "$RUNNER_TEMP/vrbrowser-signing.jks"
+          if [ -n "$KEYSTORE" ] && [ -n "$STORE_PASS" ] && [ -n "$KEY_PASS" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Restore persistent release signing key
+        if: steps.signing.outputs.enabled == 'true'
+        env:
+          KEYSTORE: ${{ secrets.VR_KEYSTORE_BASE64 }}
+        run: printf '%s' "$KEYSTORE" | base64 -d > app/vrbrowser-signing.jks
       - name: Build signed Release APK
-        working-directory: vrbrowser07
+        if: steps.signing.outputs.enabled == 'true'
         env:
+          VR_KEYSTORE_PATH: vrbrowser-signing.jks
           VR_KEYSTORE_PASSWORD: ${{ secrets.VR_KEYSTORE_PASSWORD }}
-          VR_KEY_ALIAS: ${{ secrets.VR_KEY_ALIAS }}
+          VR_KEY_ALIAS: ${{ secrets.VR_KEY_ALIAS || 'vrbrowser' }}
           VR_KEY_PASSWORD: ${{ secrets.VR_KEY_PASSWORD }}
-        run: |
-          export VR_KEYSTORE_PATH="$RUNNER_TEMP/vrbrowser-signing.jks"
-          gradle --no-daemon assembleRelease
-      - name: Upload signed APK
+        run: gradle --no-daemon assembleRelease
+      - name: Build Debug APK (fallback)
+        if: steps.signing.outputs.enabled != 'true'
+        run: gradle --no-daemon assembleDebug
+      - name: Upload signed Release APK
+        if: steps.signing.outputs.enabled == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: VRBrowser-07-signed-apk
-          path: vrbrowser07/app/build/outputs/apk/release/*.apk
+          name: VRBrowser-signed-release-apk
+          path: app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
+      - name: Upload Debug APK
+        if: steps.signing.outputs.enabled != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: VRBrowser-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
