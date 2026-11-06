@@ -36,6 +36,29 @@ jobs:
           grep -Eq 'versionName[[:space:]]*=[[:space:]]*"0\.9"' extracted-project/app/build.gradle.kts
           echo 'Source version 0.9 verified; launcher icon present.'
 
+      - name: Fix Kotlin EditText focus API in extracted sources
+        run: |
+          set -euo pipefail
+          FILE='app/src/main/java/com/vrbrowser/app/MainActivity.kt'
+          test -f "$FILE"
+          python3 - <<'PYFIX'
+          from pathlib import Path
+          p = Path('app/src/main/java/com/vrbrowser/app/MainActivity.kt')
+          source = p.read_text(encoding='utf-8')
+          original = 'selectAllOnFocus=true'
+          fixed = 'setSelectAllOnFocus(true)'
+          if original in source:
+              source = source.replace(original, fixed)
+              p.write_text(source, encoding='utf-8')
+              print('Fixed invalid selectAllOnFocus property.')
+          elif fixed in source:
+              print('Kotlin focus API already fixed.')
+          else:
+              raise SystemExit('Expected focus API statement not found; inspect MainActivity.kt')
+          assert original not in p.read_text(encoding='utf-8')
+          PYFIX
+          grep -n 'setSelectAllOnFocus(true)' "$FILE"
+
       - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
