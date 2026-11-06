@@ -45,7 +45,7 @@ jobs:
           "$SDKMANAGER" --install 'platforms;android-35' 'build-tools;35.0.0' 'platform-tools'
       - name: Require all four signing secrets
         env:
-          KEYSTORE_BASE64: ${{ secrets.VR_KEYSTORE_BASE64 }}
+          KEYSTORE_BASE64: ${{ secrets.VR_KEYSTORE_B64 }}
           KEYSTORE_PASSWORD: ${{ secrets.VR_KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.VR_KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.VR_KEY_PASSWORD }}
@@ -62,7 +62,7 @@ jobs:
       - name: Restore signing keystore
         if: steps.signing.outputs.enabled == 'true'
         env:
-          KEYSTORE_BASE64: ${{ secrets.VR_KEYSTORE_BASE64 }}
+          KEYSTORE_BASE64: ${{ secrets.VR_KEYSTORE_B64 }}
         shell: bash
         run: |
           printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/vrbrowser-signing.jks"
