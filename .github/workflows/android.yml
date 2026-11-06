@@ -60,23 +60,23 @@ jobs:
           done
           echo 'All four signing secrets are configured.'
       - name: Restore signing keystore
-        if: steps.signing.outputs.enabled == 'true'
         env:
           KEYSTORE_BASE64: ${{ secrets.VR_KEYSTORE_B64 }}
         shell: bash
         run: |
           printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/vrbrowser-signing.jks"
           chmod 600 "$RUNNER_TEMP/vrbrowser-signing.jks"
+          echo "VR_KEYSTORE_PATH=$RUNNER_TEMP/vrbrowser-signing.jks" >> "$GITHUB_ENV"
           test -s "$RUNNER_TEMP/vrbrowser-signing.jks" || { echo '::error::Decoded keystore is empty'; exit 1; }
       - name: Build SIGNED RELEASE APK from extracted ZIP ONLY
         shell: bash
         env:
-          VR_KEYSTORE_PATH: ${{ runner.temp }}/vrbrowser-signing.jks
           VR_KEYSTORE_PASSWORD: ${{ secrets.VR_KEYSTORE_PASSWORD }}
           VR_KEY_ALIAS: ${{ secrets.VR_KEY_ALIAS }}
           VR_KEY_PASSWORD: ${{ secrets.VR_KEY_PASSWORD }}
         run: |
           set -euo pipefail
+          test -s "$VR_KEYSTORE_PATH" || { echo "::error::Keystore file missing"; exit 1; }
           cd "$PROJECT_DIR"
           gradle --no-daemon :app:assembleRelease
       - name: Verify release version and signature
