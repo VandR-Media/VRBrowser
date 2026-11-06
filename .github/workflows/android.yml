@@ -1,12 +1,9 @@
-name: Build V&R Browser 0.9.1 from ZIP
+name: Build V&R Browser 0.9.2 (APK version verified)
 
 on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths:
-      - 'VRBrowser-0.9.1.zip'
-      - '.github/workflows/android.yml'
 
 permissions:
   contents: read
@@ -14,72 +11,29 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-24.04
-    defaults:
-      run:
-        shell: bash
-        working-directory: extracted-project
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Extract verified 0.9.1 source archive
-        working-directory: .
-        run: |
-          set -euo pipefail
-          test -f 'VRBrowser-0.9.1.zip' || { echo 'Missing VRBrowser-0.9.1.zip in repository root'; exit 1; }
-          mkdir -p extracted-project
-          unzip -q 'VRBrowser-0.9.1.zip' -d extracted-project
-          test -f extracted-project/app/build.gradle.kts
-          test -f extracted-project/settings.gradle.kts
-          test -f extracted-project/app/src/main/res/mipmap-mdpi/ic_launcher.png
-          grep -Eq 'versionCode[[:space:]]*=[[:space:]]*901([^0-9]|$)' extracted-project/app/build.gradle.kts
-          grep -Eq 'versionName[[:space:]]*=[[:space:]]*"0\.9\.1"' extracted-project/app/build.gradle.kts
-          echo 'Source version 0.9.1 verified; launcher icon present.'
-
-      - name: Fix Kotlin EditText focus API in extracted sources
-        run: |
-          set -euo pipefail
-          FILE='app/src/main/java/com/vrbrowser/app/MainActivity.kt'
-          test -f "$FILE"
-          python3 - <<'PYFIX'
-          from pathlib import Path
-          p = Path('app/src/main/java/com/vrbrowser/app/MainActivity.kt')
-          source = p.read_text(encoding='utf-8')
-          original = 'selectAllOnFocus=true'
-          fixed = 'setSelectAllOnFocus(true)'
-          if original in source:
-              source = source.replace(original, fixed)
-              p.write_text(source, encoding='utf-8')
-              print('Fixed invalid selectAllOnFocus property.')
-          elif fixed in source:
-              print('Kotlin focus API already fixed.')
-          else:
-              raise SystemExit('Expected focus API statement not found; inspect MainActivity.kt')
-          assert original not in p.read_text(encoding='utf-8')
-          PYFIX
-          grep -n 'setSelectAllOnFocus(true)' "$FILE"
-
-      - name: Set up Java 17
+      - name: Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
-
-      - name: Set up Gradle 8.11.1
+      - name: Gradle 8.11.1
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.11.1'
-
       - name: Install Android SDK 35
+        shell: bash
         run: |
           set -euo pipefail
           SDKMANAGER="$(find "$ANDROID_HOME" -type f -name sdkmanager -print -quit)"
           test -n "$SDKMANAGER"
           yes | "$SDKMANAGER" --licenses >/dev/null || true
           "$SDKMANAGER" --install 'platforms;android-35' 'build-tools;35.0.0' 'platform-tools'
-
       - name: Check release signing secrets
         id: signing
+        shell: bash
         env:
           KEYSTORE_BASE64: ${{ secrets.VR_KEYSTORE_BASE64 }}
           KEYSTORE_PASSWORD: ${{ secrets.VR_KEYSTORE_PASSWORD }}
@@ -90,17 +44,16 @@ jobs:
             echo 'enabled=true' >> "$GITHUB_OUTPUT"
           else
             echo 'enabled=false' >> "$GITHUB_OUTPUT"
-            echo 'No release signing secrets; building debug APK.'
+            echo 'Release signing secrets missing: building debug APK only.'
           fi
-
-      - name: Restore release signing key
+      - name: Restore persistent signing key
         if: steps.signing.outputs.enabled == 'true'
+        shell: bash
         env:
           KEYSTORE_BASE64: ${{ secrets.VR_KEYSTORE_BASE64 }}
         run: |
           printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/vrbrowser-signing.jks"
           chmod 600 "$RUNNER_TEMP/vrbrowser-signing.jks"
-
       - name: Build signed Release APK
         if: steps.signing.outputs.enabled == 'true'
         env:
@@ -109,36 +62,52 @@ jobs:
           VR_KEY_ALIAS: ${{ secrets.VR_KEY_ALIAS }}
           VR_KEY_PASSWORD: ${{ secrets.VR_KEY_PASSWORD }}
         run: gradle --no-daemon :app:assembleRelease
-
-      - name: Build Debug APK
-        if: steps.signing.outputs.enabled != 'true'
-        run: gradle --no-daemon :app:assembleDebug
-
-      - name: Verify APK metadata and stage artifact
-        env:
-          SIGNED: ${{ steps.signing.outputs.enabled }}
+      - name: Verify signed Release APK metadata
+        if: steps.signing.outputs.enabled == 'true'
+        shell: bash
         run: |
           set -euo pipefail
-          if [[ "$SIGNED" == 'true' ]]; then
-            APK="$(find app/build/outputs/apk/release -maxdepth 1 -name '*.apk' -print -quit)"
-            OUTPUT='VRBrowser-0.9.1-release-signed.apk'
-          else
-            APK="$(find app/build/outputs/apk/debug -maxdepth 1 -name '*.apk' -print -quit)"
-            OUTPUT='VRBrowser-0.9.1-debug.apk'
-          fi
+          APK="$(find app/build/outputs/apk/release -maxdepth 1 -name '*.apk' -print -quit)"
           test -n "$APK"
-          META="$("$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$APK" | head -n 1)"
+          AAPT="$ANDROID_HOME/build-tools/35.0.0/aapt"
+          META="$("$AAPT" dump badging "$APK" | head -n 1)"
           echo "$META"
           [[ "$META" == *"name='com.vrbrowser.app'"* ]]
-          [[ "$META" == *"versionCode='901'"* ]]
-          [[ "$META" == *"versionName='0.9.1'"* ]]
+          [[ "$META" == *"versionCode='902'"* ]]
+          [[ "$META" == *"versionName='0.9.2'"* ]]
           mkdir -p verified-apk
-          cp "$APK" "verified-apk/$OUTPUT"
-          sha256sum "verified-apk/$OUTPUT"
-
-      - name: Upload verified APK
+          cp "$APK" verified-apk/VRBrowser-0.9.2-release-signed.apk
+          sha256sum verified-apk/*.apk
+      - name: Upload signed Release APK
+        if: steps.signing.outputs.enabled == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: VRBrowser-0.9.1-APK
-          path: extracted-project/verified-apk/*.apk
+          name: VRBrowser-0.9.2-signed-release
+          path: verified-apk/VRBrowser-0.9.2-release-signed.apk
+          if-no-files-found: error
+      - name: Build Debug APK (fallback)
+        if: steps.signing.outputs.enabled != 'true'
+        run: gradle --no-daemon :app:assembleDebug
+      - name: Verify Debug APK metadata
+        if: steps.signing.outputs.enabled != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="$(find app/build/outputs/apk/debug -maxdepth 1 -name '*.apk' -print -quit)"
+          test -n "$APK"
+          AAPT="$ANDROID_HOME/build-tools/35.0.0/aapt"
+          META="$("$AAPT" dump badging "$APK" | head -n 1)"
+          echo "$META"
+          [[ "$META" == *"name='com.vrbrowser.app'"* ]]
+          [[ "$META" == *"versionCode='902'"* ]]
+          [[ "$META" == *"versionName='0.9.2'"* ]]
+          mkdir -p verified-apk
+          cp "$APK" verified-apk/VRBrowser-0.9.2-debug-verified.apk
+          sha256sum verified-apk/*.apk
+      - name: Upload Debug APK (fallback)
+        if: steps.signing.outputs.enabled != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: VRBrowser-0.9.2-debug-verified
+          path: verified-apk/VRBrowser-0.9.2-debug-verified.apk
           if-no-files-found: error
