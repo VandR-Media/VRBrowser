@@ -27,24 +27,26 @@ jobs:
         uses: android-actions/setup-android@v3
         with:
           packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
-      - name: Force version 1.0.4 from archive sources
+      - name: Check archive version configuration
         shell: bash
         run: |
           set -euo pipefail
-          python3 - <<'PY'
-          import pathlib,re
-          files=[pathlib.Path('app/build.gradle.kts'),pathlib.Path('app/build.gradle')]
-          f=next((p for p in files if p.is_file()),None)
-          if f is None: raise SystemExit('ERROR: app/build.gradle(.kts) not found')
-          s=f.read_text()
-          for key,value in [('versionCode','1004'),('versionName','"1.0.4"')]:
-              pat=r'(?m)^(\s*'+key+r'\s*(?:=\s*)?)(?:\d+|["\'][^"\']*["\'])'
-              s,n=re.subn(pat,lambda m:m.group(1)+value,s)
-              if n!=1: raise SystemExit(f'ERROR: expected one {key} in {f}, found {n}')
-          f.write_text(s)
-          print('Patched',f)
-          PY
-          grep -nE 'versionCode|versionName' app/build.gradle* || true
+          echo 'Version declarations in project:'
+          grep -nE 'versionCode|versionName' app/build.gradle.kts app/build.gradle 2>/dev/null || true
+          python3 - <<'PYCODE'
+          from pathlib import Path
+          import re
+          f = next((p for p in (Path('app/build.gradle.kts'), Path('app/build.gradle')) if p.exists()), None)
+          if not f:
+              raise SystemExit('ERROR: app Gradle file missing')
+          s = f.read_text()
+          # Supports one-line defaultConfig and multiline Gradle syntax.
+          for key, expected in [('versionCode', '1004'), ('versionName', '1.0.4')]:
+              m = re.search(r'\b' + key + r'\s*(?:=\s*)?(?:[\"\']([^\"\']+)[\"\']|(\d+))', s)
+              if not m or (m.group(1) or m.group(2)) != expected:
+                  raise SystemExit(f'ERROR: {key} must be {expected} in {f}; actual: {m.group(0) if m else "missing"}')
+          print('OK: archive declares version 1.0.4 / 1004')
+          PYCODE
       - name: Build release APK
         shell: bash
         run: gradle --no-daemon :app:assembleRelease
