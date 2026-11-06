@@ -1,4 +1,4 @@
-name: V&R Browser 1.0.4 — signed APK
+name: V&R Browser 1.0.4 - archive compatible signed APK
 
 on:
   workflow_dispatch:
@@ -12,7 +12,7 @@ jobs:
   build:
     runs-on: ubuntu-24.04
     steps:
-      - name: Checkout
+      - name: Checkout archive contents
         uses: actions/checkout@v4
       - name: Java 17
         uses: actions/setup-java@v4
@@ -23,63 +23,67 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.11.1'
-      - name: Android SDK
+      - name: Android SDK 35
         uses: android-actions/setup-android@v3
         with:
           packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
-      - name: Restore signing key
+      - name: Force version 1.0.4 from archive sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import pathlib,re
+          files=[pathlib.Path('app/build.gradle.kts'),pathlib.Path('app/build.gradle')]
+          f=next((p for p in files if p.is_file()),None)
+          if f is None: raise SystemExit('ERROR: app/build.gradle(.kts) not found')
+          s=f.read_text()
+          for key,value in [('versionCode','1004'),('versionName','"1.0.4"')]:
+              pat=r'(?m)^(\s*'+key+r'\s*(?:=\s*)?)(?:\d+|["\'][^"\']*["\'])'
+              s,n=re.subn(pat,lambda m:m.group(1)+value,s)
+              if n!=1: raise SystemExit(f'ERROR: expected one {key} in {f}, found {n}')
+          f.write_text(s)
+          print('Patched',f)
+          PY
+          grep -nE 'versionCode|versionName' app/build.gradle* || true
+      - name: Build release APK
+        shell: bash
+        run: gradle --no-daemon :app:assembleRelease
+      - name: Sign and verify APK using persistent keystore
         shell: bash
         env:
           KEYSTORE_B64: ${{ secrets.VR_KEYSTORE_B64 }}
           KEYSTORE_BASE64: ${{ secrets.VR_KEYSTORE_BASE64 }}
-          VR_KEYSTORE_PASSWORD: ${{ secrets.VR_KEYSTORE_PASSWORD }}
-          VR_KEY_ALIAS: ${{ secrets.VR_KEY_ALIAS }}
-          VR_KEY_PASSWORD: ${{ secrets.VR_KEY_PASSWORD }}
+          STORE_PASS: ${{ secrets.VR_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.VR_KEY_ALIAS }}
+          KEY_PASS: ${{ secrets.VR_KEY_PASSWORD }}
         run: |
           set -euo pipefail
+          SOURCE=$(find app/build/outputs/apk/release -maxdepth 1 -name '*.apk' -type f -print -quit)
+          test -n "$SOURCE" || { echo 'ERROR: No APK in release output'; find app/build/outputs -type f; exit 1; }
+          echo "Found: $SOURCE"
           KEY="${KEYSTORE_B64:-${KEYSTORE_BASE64:-}}"
-          if [[ -z "$KEY" || -z "$VR_KEYSTORE_PASSWORD" || -z "$VR_KEY_ALIAS" || -z "$VR_KEY_PASSWORD" ]]; then
-            echo 'ERROR: Missing signing secrets'; exit 1
-          fi
-          printf '%s' "$KEY" | base64 --decode > "$RUNNER_TEMP/vrbrowser-signing.jks"
-          test -s "$RUNNER_TEMP/vrbrowser-signing.jks"
-          chmod 600 "$RUNNER_TEMP/vrbrowser-signing.jks"
-          echo "VR_KEYSTORE_PATH=$RUNNER_TEMP/vrbrowser-signing.jks" >> "$GITHUB_ENV"
-      - name: Build signed release
-        env:
-          VR_KEYSTORE_PASSWORD: ${{ secrets.VR_KEYSTORE_PASSWORD }}
-          VR_KEY_ALIAS: ${{ secrets.VR_KEY_ALIAS }}
-          VR_KEY_PASSWORD: ${{ secrets.VR_KEY_PASSWORD }}
-        run: gradle --no-daemon :app:assembleRelease
-      - name: Locate APK and verify metadata and signature
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo 'APK output directory:'
-          ls -lah app/build/outputs/apk/release/ || true
-          mapfile -d '' APKS < <(find app/build/outputs/apk/release -maxdepth 1 -type f -name '*.apk' -size +0c -print0 2>/dev/null)
-          if (( ${#APKS[@]} == 0 )); then
-            echo 'ERROR: No APK produced in release output directory'
-            find app/build/outputs -type f -maxdepth 6 -print || true
-            exit 1
-          fi
-          APK="${APKS[0]}"
-          echo "Found APK: $APK"
-          AAPT="$ANDROID_HOME/build-tools/35.0.0/aapt"
+          test -n "$KEY" && test -n "$STORE_PASS" && test -n "$KEY_ALIAS" && test -n "$KEY_PASS" || { echo 'ERROR: Missing signing secrets'; exit 1; }
+          printf '%s' "$KEY" | base64 -d > "$RUNNER_TEMP/vr-signing.jks"
+          chmod 600 "$RUNNER_TEMP/vr-signing.jks"
+          mkdir -p dist
+          ZIPALIGN="$ANDROID_HOME/build-tools/35.0.0/zipalign"
           SIGNER="$ANDROID_HOME/build-tools/35.0.0/apksigner"
-          "$AAPT" dump badging "$APK" > "$RUNNER_TEMP/apk-badging.txt"
-          META="$(grep -m 1 '^package:' "$RUNNER_TEMP/apk-badging.txt")"
-          echo "Actual APK metadata: $META"
-          [[ "$META" == *"name='com.vrbrowser.app'"* ]] || { echo 'ERROR: package name mismatch'; exit 1; }
-          [[ "$META" == *"versionCode='1004'"* ]] || { echo 'ERROR: versionCode mismatch'; exit 1; }
-          [[ "$META" == *"versionName='1.0.4'"* ]] || { echo 'ERROR: versionName mismatch'; exit 1; }
-          "$SIGNER" verify --verbose --print-certs "$APK"
-          echo 'APK metadata and signature verified successfully'
-      - name: Upload release APK (even if verification fails)
+          AAPT="$ANDROID_HOME/build-tools/35.0.0/aapt"
+          "$ZIPALIGN" -f -p 4 "$SOURCE" dist/VRBrowser-aligned.apk
+          "$SIGNER" sign --ks "$RUNNER_TEMP/vr-signing.jks" --ks-key-alias "$KEY_ALIAS" --ks-pass env:STORE_PASS --key-pass env:KEY_PASS --out dist/VRBrowser-1.0.4-signed.apk dist/VRBrowser-aligned.apk
+          rm dist/VRBrowser-aligned.apk
+          "$SIGNER" verify --verbose --print-certs dist/VRBrowser-1.0.4-signed.apk
+          "$AAPT" dump badging dist/VRBrowser-1.0.4-signed.apk | grep -m1 '^package:' > "$RUNNER_TEMP/metadata.txt"
+          cat "$RUNNER_TEMP/metadata.txt"
+          grep -Fq "name='com.vrbrowser.app'" "$RUNNER_TEMP/metadata.txt" || { echo 'ERROR: package mismatch'; exit 1; }
+          grep -Fq "versionCode='1004'" "$RUNNER_TEMP/metadata.txt" || { echo 'ERROR: versionCode mismatch'; exit 1; }
+          grep -Fq "versionName='1.0.4'" "$RUNNER_TEMP/metadata.txt" || { echo 'ERROR: versionName mismatch'; exit 1; }
+          echo 'SUCCESS: Signed APK verified'
+      - name: Upload signed APK
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: VRBrowser-1.0.4-release-apk
-          path: app/build/outputs/apk/release/*.apk
+          name: VRBrowser-1.0.4-SIGNED
+          path: dist/VRBrowser-1.0.4-signed.apk
           if-no-files-found: warn
           retention-days: 30
