@@ -48,7 +48,7 @@ jobs:
           VR_KEYSTORE_PASSWORD: ${{ secrets.VR_KEYSTORE_PASSWORD }}
           VR_KEY_ALIAS: ${{ secrets.VR_KEY_ALIAS || 'vrbrowser' }}
           VR_KEY_PASSWORD: ${{ secrets.VR_KEY_PASSWORD }}
-        run: gradle --no-daemon assembleRelease
+        run: gradle --no-daemon assembleDebug --stacktrace --info
       - name: Build Debug APK (fallback)
         if: steps.signing.outputs.enabled != 'true'
         run: gradle --no-daemon assembleDebug
