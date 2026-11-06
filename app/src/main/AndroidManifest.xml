@@ -2,7 +2,7 @@
  <uses-permission android:name="android.permission.INTERNET"/>
  <uses-permission android:name="android.permission/POST_NOTIFICATIONS"/>
  <application android:name=".BrowserApp" android:label="V&amp;R Browser" android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher" android:theme="@android:style/Theme.Material.NoActionBar" android:usesCleartextTraffic="false" android:allowBackup="false">
-  <activity android:name=".DiagnosticActivity" android:exported="true" android:label="V&R Диагностика">
+  <activity android:name=".DiagnosticActivity" android:exported="true" android:label="V&amp;R Диагностика">
    <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
   </activity>
   <activity android:name=".PlayerActivity" android:exported="false"/>
