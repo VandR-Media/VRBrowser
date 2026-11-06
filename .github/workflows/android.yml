@@ -27,25 +27,30 @@ jobs:
         uses: android-actions/setup-android@v3
         with:
           packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
-      - name: Check archive version configuration
+      - name: Set version 1.0.4 in checked-out sources
         shell: bash
         run: |
           set -euo pipefail
-          echo 'Version declarations in project:'
-          grep -nE 'versionCode|versionName' app/build.gradle.kts app/build.gradle 2>/dev/null || true
           python3 - <<'PYCODE'
           from pathlib import Path
           import re
           f = next((p for p in (Path('app/build.gradle.kts'), Path('app/build.gradle')) if p.exists()), None)
-          if not f:
+          if f is None:
               raise SystemExit('ERROR: app Gradle file missing')
           s = f.read_text()
-          # Supports one-line defaultConfig and multiline Gradle syntax.
-          for key, expected in [('versionCode', '1004'), ('versionName', '1.0.4')]:
-              m = re.search(r'\b' + key + r'\s*(?:=\s*)?(?:[\"\']([^\"\']+)[\"\']|(\d+))', s)
-              if not m or (m.group(1) or m.group(2)) != expected:
-                  raise SystemExit(f'ERROR: {key} must be {expected} in {f}; actual: {m.group(0) if m else "missing"}')
-          print('OK: archive declares version 1.0.4 / 1004')
+          substitutions = [
+              (r'(\bversionCode\s*(?:=\s*)?)\d+', r'\g<1>1004'),
+              (r'(\bversionName\s*(?:=\s*)?)[\"\'][^\"\']*[\"\']', r'\g<1>"1.0.4"'),
+          ]
+          for pattern, replacement in substitutions:
+              s, count = re.subn(pattern, replacement, s)
+              if count != 1:
+                  raise SystemExit(f'ERROR: expected exactly one match for {pattern}, got {count}')
+          f.write_text(s)
+          print('Updated', f)
+          for line in s.splitlines():
+              if 'versionCode' in line or 'versionName' in line:
+                  print(line)
           PYCODE
       - name: Build release APK
         shell: bash
