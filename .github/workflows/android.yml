@@ -1,9 +1,12 @@
-name: V&R Browser 1.0.4 - archive compatible signed APK
+name: V&R Browser 1.0.3 — canonical ZIP only
 
 on:
   workflow_dispatch:
   push:
     branches: [main]
+    paths:
+      - 'VRBrowser-1.0.3.zip'
+      - '.github/workflows/android.yml'
 
 permissions:
   contents: read
@@ -11,86 +14,122 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
-      - name: Checkout archive contents
+      - name: Checkout repository
         uses: actions/checkout@v4
-      - name: Java 17
+
+      - name: Validate and extract canonical source archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARCHIVE="VRBrowser-1.0.3.zip"
+          test -f "$ARCHIVE" || { echo "::error::Missing $ARCHIVE at repository root"; exit 1; }
+          unzip -tq "$ARCHIVE"
+          mkdir -p "$RUNNER_TEMP/vr-source"
+          unzip -q "$ARCHIVE" -d "$RUNNER_TEMP/vr-source"
+
+          GRADLE_FILE="$(find "$RUNNER_TEMP/vr-source" -type f -path '*/app/build.gradle.kts' -print -quit)"
+          test -n "$GRADLE_FILE" || { echo "::error::app/build.gradle.kts not found in canonical ZIP"; exit 1; }
+          PROJECT_DIR="$(dirname "$(dirname "$GRADLE_FILE")")"
+          test -f "$PROJECT_DIR/settings.gradle.kts" || { echo "::error::settings.gradle.kts missing beside app/"; exit 1; }
+
+          grep -Eq 'versionCode[[:space:]]*=[[:space:]]*1003([^0-9]|$)' "$GRADLE_FILE" || {
+            echo "::error::Canonical archive does not declare versionCode 1003"; exit 1;
+          }
+          grep -Eq 'versionName[[:space:]]*=[[:space:]]*"1\.0\.3"' "$GRADLE_FILE" || {
+            echo "::error::Canonical archive does not declare versionName 1.0.3"; exit 1;
+          }
+
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Canonical source: $GRADLE_FILE"
+          sha256sum "$ARCHIVE"
+          echo "Validated VRBrowser-1.0.3.zip; no repository source files will be used for the build."
+
+      - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
-      - name: Gradle 8.11.1
+
+      - name: Set up Gradle 8.11.1
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.11.1'
-      - name: Android SDK 35
+
+      - name: Set up Android SDK 35
         uses: android-actions/setup-android@v3
         with:
           packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
-      - name: Set version 1.0.4 in checked-out sources
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 - <<'PYCODE'
-          from pathlib import Path
-          import re
-          f = next((p for p in (Path('app/build.gradle.kts'), Path('app/build.gradle')) if p.exists()), None)
-          if f is None:
-              raise SystemExit('ERROR: app Gradle file missing')
-          s = f.read_text()
-          substitutions = [
-              (r'(\bversionCode\s*(?:=\s*)?)\d+', r'\g<1>1004'),
-              (r'(\bversionName\s*(?:=\s*)?)[\"\'][^\"\']*[\"\']', r'\g<1>"1.0.4"'),
-          ]
-          for pattern, replacement in substitutions:
-              s, count = re.subn(pattern, replacement, s)
-              if count != 1:
-                  raise SystemExit(f'ERROR: expected exactly one match for {pattern}, got {count}')
-          f.write_text(s)
-          print('Updated', f)
-          for line in s.splitlines():
-              if 'versionCode' in line or 'versionName' in line:
-                  print(line)
-          PYCODE
-      - name: Build release APK
-        shell: bash
-        run: gradle --no-daemon :app:assembleRelease
-      - name: Sign and verify APK using persistent keystore
+
+      - name: Validate release signing secrets
+        id: signing
         shell: bash
         env:
-          KEYSTORE_B64: ${{ secrets.VR_KEYSTORE_B64 }}
           KEYSTORE_BASE64: ${{ secrets.VR_KEYSTORE_BASE64 }}
+          KEYSTORE_B64: ${{ secrets.VR_KEYSTORE_B64 }}
           STORE_PASS: ${{ secrets.VR_KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.VR_KEY_ALIAS }}
           KEY_PASS: ${{ secrets.VR_KEY_PASSWORD }}
         run: |
           set -euo pipefail
-          SOURCE=$(find app/build/outputs/apk/release -maxdepth 1 -name '*.apk' -type f -print -quit)
-          test -n "$SOURCE" || { echo 'ERROR: No APK in release output'; find app/build/outputs -type f; exit 1; }
-          echo "Found: $SOURCE"
-          KEY="${KEYSTORE_B64:-${KEYSTORE_BASE64:-}}"
-          test -n "$KEY" && test -n "$STORE_PASS" && test -n "$KEY_ALIAS" && test -n "$KEY_PASS" || { echo 'ERROR: Missing signing secrets'; exit 1; }
-          printf '%s' "$KEY" | base64 -d > "$RUNNER_TEMP/vr-signing.jks"
-          chmod 600 "$RUNNER_TEMP/vr-signing.jks"
-          mkdir -p dist
-          ZIPALIGN="$ANDROID_HOME/build-tools/35.0.0/zipalign"
-          SIGNER="$ANDROID_HOME/build-tools/35.0.0/apksigner"
+          KEY="${KEYSTORE_BASE64:-${KEYSTORE_B64:-}}"
+          test -n "$KEY" || { echo "::error::Missing VR_KEYSTORE_BASE64 or VR_KEYSTORE_B64"; exit 1; }
+          test -n "$STORE_PASS" || { echo "::error::Missing VR_KEYSTORE_PASSWORD"; exit 1; }
+          test -n "$KEY_ALIAS" || { echo "::error::Missing VR_KEY_ALIAS"; exit 1; }
+          test -n "$KEY_PASS" || { echo "::error::Missing VR_KEY_PASSWORD"; exit 1; }
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
+
+      - name: Restore persistent signing keystore
+        if: steps.signing.outputs.enabled == 'true'
+        shell: bash
+        env:
+          KEYSTORE_BASE64: ${{ secrets.VR_KEYSTORE_BASE64 }}
+          KEYSTORE_B64: ${{ secrets.VR_KEYSTORE_B64 }}
+        run: |
+          set -euo pipefail
+          KEY="${KEYSTORE_BASE64:-${KEYSTORE_B64:-}}"
+          printf '%s' "$KEY" | base64 --decode > "$RUNNER_TEMP/vrbrowser-signing.jks"
+          chmod 600 "$RUNNER_TEMP/vrbrowser-signing.jks"
+          test -s "$RUNNER_TEMP/vrbrowser-signing.jks" || { echo "::error::Decoded keystore is empty"; exit 1; }
+
+      - name: Build signed Release APK from extracted ZIP only
+        shell: bash
+        env:
+          VR_KEYSTORE_PATH: ${{ runner.temp }}/vrbrowser-signing.jks
+          VR_KEYSTORE_PASSWORD: ${{ secrets.VR_KEYSTORE_PASSWORD }}
+          VR_KEY_ALIAS: ${{ secrets.VR_KEY_ALIAS }}
+          VR_KEY_PASSWORD: ${{ secrets.VR_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          cd "$PROJECT_DIR"
+          gradle --no-daemon :app:assembleRelease
+
+      - name: Verify package, version, and APK signature
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="$(find "$PROJECT_DIR/app/build/outputs/apk/release" -maxdepth 1 -type f -name '*.apk' -print -quit)"
+          test -n "$APK" || { echo "::error::Release APK missing"; exit 1; }
+
           AAPT="$ANDROID_HOME/build-tools/35.0.0/aapt"
-          "$ZIPALIGN" -f -p 4 "$SOURCE" dist/VRBrowser-aligned.apk
-          "$SIGNER" sign --ks "$RUNNER_TEMP/vr-signing.jks" --ks-key-alias "$KEY_ALIAS" --ks-pass env:STORE_PASS --key-pass env:KEY_PASS --out dist/VRBrowser-1.0.4-signed.apk dist/VRBrowser-aligned.apk
-          rm dist/VRBrowser-aligned.apk
-          "$SIGNER" verify --verbose --print-certs dist/VRBrowser-1.0.4-signed.apk
-          "$AAPT" dump badging dist/VRBrowser-1.0.4-signed.apk | grep -m1 '^package:' > "$RUNNER_TEMP/metadata.txt"
-          cat "$RUNNER_TEMP/metadata.txt"
-          grep -Fq "name='com.vrbrowser.app'" "$RUNNER_TEMP/metadata.txt" || { echo 'ERROR: package mismatch'; exit 1; }
-          grep -Fq "versionCode='1004'" "$RUNNER_TEMP/metadata.txt" || { echo 'ERROR: versionCode mismatch'; exit 1; }
-          grep -Fq "versionName='1.0.4'" "$RUNNER_TEMP/metadata.txt" || { echo 'ERROR: versionName mismatch'; exit 1; }
-          echo 'SUCCESS: Signed APK verified'
-      - name: Upload signed APK
-        if: always()
+          SIGNER="$ANDROID_HOME/build-tools/35.0.0/apksigner"
+          "$AAPT" dump badging "$APK" > "$RUNNER_TEMP/apk-badging.txt"
+          META="$(sed -n '1p' "$RUNNER_TEMP/apk-badging.txt")"
+          echo "$META"
+          [[ "$META" == *"name='com.vrbrowser.app'"* ]] || { echo "::error::Package name mismatch"; exit 1; }
+          [[ "$META" == *"versionCode='1003'"* ]] || { echo "::error::versionCode mismatch"; exit 1; }
+          [[ "$META" == *"versionName='1.0.3'"* ]] || { echo "::error::versionName mismatch"; exit 1; }
+
+          "$SIGNER" verify --verbose --print-certs "$APK"
+          mkdir -p "$RUNNER_TEMP/vr-output"
+          cp "$APK" "$RUNNER_TEMP/vr-output/VRBrowser-1.0.3-signed-release.apk"
+          sha256sum "$RUNNER_TEMP/vr-output/VRBrowser-1.0.3-signed-release.apk"
+
+      - name: Upload signed Release APK
         uses: actions/upload-artifact@v4
         with:
-          name: VRBrowser-1.0.4-SIGNED
-          path: dist/VRBrowser-1.0.4-signed.apk
-          if-no-files-found: warn
+          name: VRBrowser-1.0.3-SIGNED-RELEASE
+          path: ${{ runner.temp }}/vr-output/VRBrowser-1.0.3-signed-release.apk
+          if-no-files-found: error
           retention-days: 30
