@@ -1,0 +1,14 @@
+<resources>
+ <style name="VRTheme" parent="android:style/Theme.Material.NoActionBar">
+  <item name="android:colorAccent">#EE4DAB</item>
+  <item name="android:alertDialogTheme">@style/VRDialog</item>
+ </style>
+ <style name="VRDialog" parent="android:style/Theme.Material.Dialog.Alert">
+  <item name="android:windowBackground">@drawable/vr_back</item>
+  <item name="android:windowMinWidthMajor">86%</item>
+  <item name="android:windowMinWidthMinor">86%</item>
+  <item name="android:colorAccent">#27BEF5</item>
+  <item name="android:textColorPrimary">#FFFFFFFF</item>
+  <item name="android:textColorSecondary">#FFD2E5F2</item>
+ </style>
+</resources>
