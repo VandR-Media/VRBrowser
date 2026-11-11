@@ -1,6 +1,6 @@
 plugins { id("com.android.application"); id("org.jetbrains.kotlin.android") }
 android { namespace = "com.vrbrowser.app"; compileSdk = 35
- defaultConfig { applicationId = "com.vrbrowser.app"; minSdk = 26; targetSdk = 35; versionCode = 1008; versionName = "1.0.8" }
+ defaultConfig { applicationId = "com.vrbrowser.app"; minSdk = 26; targetSdk = 35; versionCode = 1009; versionName = "1.0.9" }
  signingConfigs {
   create("persistent") {
    storeFile = file(System.getenv("VR_KEYSTORE_PATH") ?: "vrbrowser-signing.jks")
@@ -25,5 +25,7 @@ dependencies {
  implementation("androidx.media3:media3-exoplayer-dash:1.5.1")
  implementation("androidx.media3:media3-ui:1.5.1")
  implementation("androidx.lifecycle:lifecycle-livedata-ktx:2.8.7")
+ // Fix OEM SecurityException from old WorkManager ForceStopRunnable.setExact().
+ implementation("androidx.work:work-runtime:2.12.0")
  implementation("com.github.Edsuns.AdblockAndroid:ad-filter:master-SNAPSHOT")
 }

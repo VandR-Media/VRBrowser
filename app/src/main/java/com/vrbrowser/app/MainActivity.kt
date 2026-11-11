@@ -39,6 +39,7 @@ class MainActivity : Activity() {
  private val detected = java.util.Collections.synchronizedSet(linkedSetOf<String>())
  private var pendingDownload: Triple<String,String,String>? = null
  private val knownQualities=mutableMapOf<String,String>()
+ private val knownAudioSources=mutableMapOf<String,String>()
  private val shield by lazy { Shield(this) }
  private val adFilter by lazy { AdFilter.get() }
  private val filterDirtyObserver = Observer<None> {
@@ -264,11 +265,14 @@ class MainActivity : Activity() {
      .putExtra("user_agent",userAgent)
      .putExtra("title",web.title ?: "Видео онлайн")
     val controller=InlinePlayerController(this,pages,web,source,referer,userAgent,
-     fullscreen={
+     fullscreen={position->
       inlinePlayer?.release(false)
       inlinePlayer=null
       playerButton.visibility=View.VISIBLE
-      startActivity(fullscreen)
+      startActivity(fullscreen.putExtra("start_position",position))
+     },
+     download={quality->
+      confirmDownload(source,userAgent,"video/mp4","",quality)
      },
      closed={
       inlinePlayer=null
@@ -376,21 +380,60 @@ class MainActivity : Activity() {
  }
  private fun probeHlsResolution(url:String,referer:String,userAgent:String):Pair<String?,android.graphics.Bitmap?> {
   var retriever:android.media.MediaMetadataRetriever?=null
+  var extractor:android.media.MediaExtractor?=null
+  val temp=java.io.File.createTempFile("vrprobe_",".ts",cacheDir)
   return try {
    val playlist=readHlsPlaylist(url,referer,userAgent)
    if(playlist.contains("#EXT-X-STREAM-INF"))return Pair(null,null)
-   val segment=playlist.lines().firstOrNull{it.isNotBlank()&&!it.trim().startsWith("#")} ?: return Pair(null,null)
+   val segment=playlist.lines().firstOrNull{it.isNotBlank()&&!it.trim().startsWith("#")}
+    ?:return Pair(null,null)
    val segmentUrl=java.net.URL(java.net.URL(url),segment.trim()).toString()
-   val headers=linkedMapOf("User-Agent" to userAgent)
-   if(referer.startsWith("http"))headers["Referer"]=referer
-   CookieManager.getInstance().getCookie(segmentUrl)?.takeIf{it.isNotBlank()}?.let{headers["Cookie"]=it}
-   retriever=android.media.MediaMetadataRetriever()
-   retriever.setDataSource(segmentUrl,headers)
-   val height=retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull()
-   val frame=try{retriever.getFrameAtTime(0,android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC)}catch(_:Exception){null}
-   Pair(height?.takeIf{it>0}?.let{"${it}p"},frame)
-  } catch(_:Exception){Pair(null,null)}
-  finally { try{retriever?.release()}catch(_:Exception){} }
+   val conn=(java.net.URL(segmentUrl).openConnection() as java.net.HttpURLConnection).apply {
+    connectTimeout=8000;readTimeout=12000;instanceFollowRedirects=true
+    setRequestProperty("User-Agent",userAgent)
+    setRequestProperty("Accept-Encoding","identity")
+    if(referer.startsWith("http")){
+     setRequestProperty("Referer",referer)
+     val parsed=android.net.Uri.parse(referer)
+     setRequestProperty("Origin","${parsed.scheme}://${parsed.authority}")
+    }
+    try{CookieManager.getInstance().getCookie(segmentUrl)?.takeIf{it.isNotBlank()}?.let{
+     setRequestProperty("Cookie",it)
+    }}catch(_:Exception){}
+   }
+   try {
+    if(conn.responseCode!=200)return Pair(null,null)
+    conn.inputStream.use{input->temp.outputStream().use{output->
+     val buffer=ByteArray(32768)
+     var written=0
+     while(written<12*1024*1024){
+      val count=input.read(buffer,0,minOf(buffer.size,12*1024*1024-written))
+      if(count<0)break
+      output.write(buffer,0,count)
+      written+=count
+     }
+    }}
+   }finally{conn.disconnect()}
+   extractor=android.media.MediaExtractor().apply{setDataSource(temp.absolutePath)}
+   var height:Int?=null
+   val mediaExtractor=extractor
+   for(i in 0 until mediaExtractor.trackCount){
+    val format=mediaExtractor.getTrackFormat(i)
+    if(format.getString(android.media.MediaFormat.KEY_MIME).orEmpty().startsWith("video/") &&
+      format.containsKey(android.media.MediaFormat.KEY_HEIGHT)){
+     height=format.getInteger(android.media.MediaFormat.KEY_HEIGHT).takeIf{it>0}
+     break
+    }
+   }
+   retriever=android.media.MediaMetadataRetriever().apply{setDataSource(temp.absolutePath)}
+   val frame=try{retriever.getFrameAtTime(0L,android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC)}catch(_:Exception){null}
+   Pair(height?.let{"${it}p"},frame)
+  }catch(_:Exception){Pair(null,null)}
+  finally{
+   try{retriever?.release()}catch(_:Exception){}
+   try{extractor?.release()}catch(_:Exception){}
+   temp.delete()
+  }
  }
  private fun inspectMedia(url: String, referer: String, userAgent:String): MediaDetails {
   var quality:String?=null
@@ -407,14 +450,12 @@ class MainActivity : Activity() {
      if(seconds>0)duration=(seconds*1000).toLong()
     }
    } catch(_:Exception) { }
-   val estimate=estimateHls(url,referer,userAgent)
-   duration=duration ?: estimate.first
-   estimatedBytes=estimate.second
-   if(quality==null) {
-    val probe=probeHlsResolution(url,referer,userAgent)
-    quality=probe.first
-    frame=probe.second
-   }
+   // Do not calculate size from a few HLS chunks: the answer can differ by 50% or more.
+   // Probe the *actual bytes* even when the manifest declares a quality.
+   estimatedBytes=null
+   val probe=probeHlsResolution(url,referer,userAgent)
+   if(probe.first!=null)quality=probe.first
+   frame=probe.second
   } else if(!url.contains(".mpd",true)) {
    estimatedBytes=remoteLength(url,referer,userAgent)
    var retriever:android.media.MediaMetadataRetriever?=null
@@ -424,7 +465,7 @@ class MainActivity : Activity() {
     CookieManager.getInstance().getCookie(url)?.takeIf{it.isNotBlank()}?.let{headers["Cookie"]=it}
     retriever=android.media.MediaMetadataRetriever()
     retriever.setDataSource(url,headers)
-    duration=retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()?.div(1000)
+    duration=retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()
     val height=retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull()
     quality=height?.takeIf{it>0}?.let{"${it}p"}
     frame=retriever.getFrameAtTime(1000000L,android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
@@ -433,8 +474,8 @@ class MainActivity : Activity() {
   }
   return MediaDetails(quality,duration,frame,estimatedBytes)
  }
- private data class StreamEntry(val url: String, val quality: String? = null, val bitrate: Long? = null)
- private data class HlsVariant(val url:String,val quality:String?,val bitrate:Long?)
+ private data class StreamEntry(val url: String, val quality: String? = null, val bitrate: Long? = null, val audioSource:String?=null)
+ private data class HlsVariant(val url:String,val quality:String?,val bitrate:Long?,val audioSource:String?)
  private fun readHlsPlaylist(url:String,referer:String,userAgent:String):String {
   val conn=(java.net.URL(url).openConnection() as java.net.HttpURLConnection).apply {
    connectTimeout=5000; readTimeout=7000; instanceFollowRedirects=true
@@ -445,13 +486,16 @@ class MainActivity : Activity() {
   }
   return try { conn.inputStream.bufferedReader().use{it.readText().take(600000)} } finally { conn.disconnect() }
  }
- private fun expandStreams(url:String,referer:String,userAgent:String,depth:Int=0,inheritedQuality:String?=null,inheritedBitrate:Long?=null,visited:Set<String> = emptySet()):List<StreamEntry> {
-  if(!url.contains(".m3u8",true))return listOf(StreamEntry(url,inheritedQuality,inheritedBitrate))
-  if(depth>4 || url in visited)return listOf(StreamEntry(url,inheritedQuality ?: "Качество неизвестно",inheritedBitrate))
+ private fun expandStreams(url:String,referer:String,userAgent:String,depth:Int=0,inheritedQuality:String?=null,inheritedBitrate:Long?=null,visited:Set<String> = emptySet(),inheritedAudio:String?=null):List<StreamEntry> {
+  if(!url.contains(".m3u8",true))return listOf(StreamEntry(url,inheritedQuality,inheritedBitrate,inheritedAudio))
+  if(depth>4 || url in visited)return listOf(StreamEntry(url,inheritedQuality ?: "Качество неизвестно",inheritedBitrate,inheritedAudio))
   return try {
    val content=readHlsPlaylist(url,referer,userAgent)
-   if(!content.trimStart().startsWith("#EXTM3U"))return listOf(StreamEntry(url,inheritedQuality ?: "Качество неизвестно",inheritedBitrate))
+   if(!content.trimStart().startsWith("#EXTM3U"))return listOf(StreamEntry(url,inheritedQuality ?: "Качество неизвестно",inheritedBitrate,inheritedAudio))
    val lines=content.lines()
+   val audioTags=lines.filter{it.trim().startsWith("#EXT-X-MEDIA:")&&it.contains("TYPE=AUDIO")}
+   fun attr(tag:String,key:String):String?=Regex("""(?:^|,)\s*${key}=("[^"]*"|[^,]+)""")
+    .find(tag.substringAfter(':'))?.groupValues?.get(1)?.trim('"')
    val variants=lines.mapIndexedNotNull { index,line ->
     val tag=line.trim()
     if(!tag.startsWith("#EXT-X-STREAM-INF:"))null else {
@@ -465,22 +509,29 @@ class MainActivity : Activity() {
       }
       val quality=height?.let{"${it}p"} ?: namedQuality
       val bitrate=Regex("""(?:AVERAGE-BANDWIDTH|BANDWIDTH)=(\d+)""").find(tag)?.groupValues?.get(1)?.toLongOrNull()
-      HlsVariant(java.net.URL(java.net.URL(url),child.trim()).toString(),quality,bitrate)
+      val audioGroup=attr(tag,"AUDIO")
+      val tracks=audioTags.filter{attr(it,"GROUP-ID")==audioGroup&&!attr(it,"URI").isNullOrBlank()}
+      val selected=tracks.firstOrNull{attr(it,"DEFAULT")=="YES"}?:tracks.firstOrNull()
+      val audioUrl=selected?.let{attr(it,"URI")}?.let{
+       java.net.URL(java.net.URL(url),it).toString()
+      }
+      HlsVariant(java.net.URL(java.net.URL(url),child.trim()).toString(),quality,bitrate,audioUrl)
      }
     }
    }
-   if(variants.isEmpty())return listOf(StreamEntry(url,inheritedQuality ?: "Качество неизвестно",inheritedBitrate))
+   if(variants.isEmpty())return listOf(StreamEntry(url,inheritedQuality ?: "Качество неизвестно",inheritedBitrate,inheritedAudio))
    variants.flatMap { variant ->
     val label=variant.quality ?: inheritedQuality ?: variant.bitrate?.let{"Битрейт %.2f Мбит/с".format(java.util.Locale.getDefault(),it/1000000.0)} ?: "Качество неизвестно"
-    expandStreams(variant.url,referer,userAgent,depth+1,label,variant.bitrate ?: inheritedBitrate,visited+url).map { leaf ->
+    expandStreams(variant.url,referer,userAgent,depth+1,label,variant.bitrate ?: inheritedBitrate,visited+url,variant.audioSource ?: inheritedAudio).map { leaf ->
      leaf.copy(
       quality=if(leaf.quality.isNullOrBlank() || leaf.quality=="Качество неизвестно") label else leaf.quality,
-      bitrate=leaf.bitrate ?: variant.bitrate ?: inheritedBitrate
+      bitrate=leaf.bitrate ?: variant.bitrate ?: inheritedBitrate,
+      audioSource=leaf.audioSource ?: variant.audioSource ?: inheritedAudio
      )
     }
    }.distinctBy{it.url}
   } catch (_:Exception) {
-   listOf(StreamEntry(url,inheritedQuality ?: "Качество неизвестно",inheritedBitrate))
+   listOf(StreamEntry(url,inheritedQuality ?: "Качество неизвестно",inheritedBitrate,inheritedAudio))
   }
  }
  private fun showMedia() {
@@ -501,6 +552,7 @@ class MainActivity : Activity() {
      entries.forEachIndexed { index, entry ->
       val url=entry.url
       if(entry.quality!=null)knownQualities[url]=entry.quality
+      entry.audioSource?.let{knownAudioSources[url]=it}
       val item=LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL; gravity=Gravity.CENTER_VERTICAL; setPadding(dp(5),dp(9),dp(5),dp(9)) }
       val thumb=ImageView(this).apply {
        setImageResource(android.R.drawable.ic_media_play)
@@ -522,7 +574,7 @@ class MainActivity : Activity() {
        setOnClickListener { confirmDownload(url,"","","",entry.quality) }
       }
       item.addView(download,LinearLayout.LayoutParams(dp(42),dp(48)))
-      thumb.setOnClickListener { startActivity(Intent(this,PlayerActivity::class.java).putExtra("url",url).putExtra("referer",referer).putExtra("user_agent",active().settings.userAgentString)) }
+      thumb.setOnClickListener { startActivity(Intent(this,PlayerActivity::class.java).putExtra("url",url).putExtra("referer",referer).putExtra("user_agent",active().settings.userAgentString).putExtra("audio_source",entry.audioSource)) }
       info.setOnClickListener { showMediaActions(url,"${index+1}. ${entry.quality ?: mediaType(url)}") }
       list.addView(item)
       list.addView(View(this).apply { setBackgroundColor(Color.rgb(53,64,83)) },LinearLayout.LayoutParams(-1,dp(1)))
@@ -530,13 +582,22 @@ class MainActivity : Activity() {
        val details=inspectMedia(url,referer,userAgent)
        runOnUiThread {
         if (isFinishing || isDestroyed) return@runOnUiThread
-        val resolution=details.quality ?: entry.quality ?: "Качество неизвестно"
+        val verified=details.quality
+        val declared=entry.quality
+        val resolution=verified ?: declared ?: "Качество неизвестно"
+        val verifiedLabel=when {
+         verified!=null && declared!=null && verified!=declared ->
+          "${verified} (заявлено ${declared})"
+         verified!=null -> verified
+         declared!=null -> "${declared} (не проверено)"
+         else -> "Качество неизвестно"
+        }
         knownQualities[url]=resolution
         download.contentDescription="Скачать $resolution"
         download.setOnClickListener { confirmDownload(url,"video","","",resolution) }
-        info.setOnClickListener { showMediaActions(url,"${index+1}. $resolution") }
+        info.setOnClickListener { showMediaActions(url,"${index+1}. $verifiedLabel") }
         val size=details.estimatedBytes
-        metadata.text="${mediaType(url).substringBefore(" · ")} · $resolution · ${details.durationMs?.let { prettyDuration(it) } ?: "Длительность неизвестна"} · ${prettySize(size)}"
+        metadata.text="${mediaType(url).substringBefore(" · ")} · $verifiedLabel · ${details.durationMs?.let { prettyDuration(it) } ?: "Длительность неизвестна"} · ${prettySize(size)}"
         details.frame?.let { bitmap ->
          thumb.setPadding(0,0,0,0); thumb.scaleType=ImageView.ScaleType.CENTER_CROP
          thumb.setImageBitmap(bitmap)
@@ -594,7 +655,7 @@ class MainActivity : Activity() {
      val grantFlags=(data?.flags?:0) and (Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
      try { if(grantFlags!=0)contentResolver.takePersistableUriPermission(target,grantFlags) } catch (_:Exception) { }
      val ua=active().settings.userAgentString
-     TransferStore.update(this,id,name,"Подготовка",0,0,target.toString(),source=url,referer=referer,userAgent=ua,quality=knownQualities[url])
+     TransferStore.update(this,id,name,"Подготовка",0,0,target.toString(),source=url,referer=referer,userAgent=ua,quality=knownQualities[url],audioSource=knownAudioSources[url])
      if(url.contains(".m3u8",true)) HlsDownloader.start(this,id)
      else {
       // Non-HLS direct files are downloaded to the selected document in the same resumable task framework.

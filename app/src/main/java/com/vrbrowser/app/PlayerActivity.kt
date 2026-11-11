@@ -45,6 +45,10 @@ class PlayerActivity : Activity() {
  private var player:ExoPlayer?=null
  private var trackSelector:DefaultTrackSelector?=null
  private lateinit var playerView:PlayerView
+ private lateinit var rootLayout:LinearLayout
+ private lateinit var videoStage:FrameLayout
+ private lateinit var fullscreenControls:LinearLayout
+ private lateinit var bottomSpacer:View
  private lateinit var playButton:TextView
  private lateinit var qualityButton:TextView
  private lateinit var audioButton:TextView
@@ -58,6 +62,7 @@ class PlayerActivity : Activity() {
  private var fullscreen=false
  private var cropped=false
  private var pendingDownloadQuality:String?=null
+ private var pendingAudioLanguage:String?=null
  private var seeking=false
  private val handler=Handler(Looper.getMainLooper())
  private val progressUpdater=object:Runnable {
@@ -107,7 +112,7 @@ class PlayerActivity : Activity() {
   val userAgent=intent.getStringExtra("user_agent")?.takeIf{it.isNotBlank()}
    ?: "Mozilla/5.0 (Android) V&R Browser"
 
-  val root=LinearLayout(this).apply {
+  rootLayout=LinearLayout(this).apply {
    orientation=LinearLayout.VERTICAL
    setBackgroundColor(backgroundColor)
    setPadding(dp(12),dp(8),dp(12),dp(12))
@@ -126,9 +131,9 @@ class PlayerActivity : Activity() {
    addView(label(intent.getStringExtra("title") ?: "Видео онлайн",14f,Color.WHITE,true))
   },LinearLayout.LayoutParams(0,-2,1f))
   headerContainer=header
-  root.addView(header,LinearLayout.LayoutParams(-1,dp(62)))
+  rootLayout.addView(header,LinearLayout.LayoutParams(-1,dp(62)))
 
-  val stage=FrameLayout(this).apply {
+  videoStage=FrameLayout(this).apply {
    setBackground(rounded(Color.BLACK,22,Color.rgb(48,68,91)))
    clipToOutline=true
    elevation=dp(3).toFloat()
@@ -140,7 +145,7 @@ class PlayerActivity : Activity() {
    setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
    setKeepContentOnPlayerReset(true)
   }
-  stage.addView(playerView,FrameLayout.LayoutParams(-1,-1))
+  videoStage.addView(playerView,FrameLayout.LayoutParams(-1,-1))
   fullscreenButton=TextView(this).apply {
    text="⛶"
    textSize=25f
@@ -150,10 +155,11 @@ class PlayerActivity : Activity() {
    contentDescription="Полноэкранный режим"
    setOnClickListener{setFullscreen(!fullscreen)}
   }
-  stage.addView(fullscreenButton,FrameLayout.LayoutParams(dp(48),dp(44),Gravity.TOP or Gravity.END).apply{
+  videoStage.addView(fullscreenButton,FrameLayout.LayoutParams(dp(48),dp(44),Gravity.TOP or Gravity.END).apply{
    setMargins(0,dp(10),dp(10),0)
   })
-  root.addView(stage,LinearLayout.LayoutParams(-1,0,1f).apply {
+  val portraitVideoHeight=((resources.displayMetrics.widthPixels-dp(24))*9/16).coerceAtLeast(dp(160))
+  rootLayout.addView(videoStage,LinearLayout.LayoutParams(-1,portraitVideoHeight).apply{
    setMargins(0,dp(4),0,dp(12))
   })
 
@@ -224,10 +230,7 @@ class PlayerActivity : Activity() {
   controls.addView(qualityButton)
   controls.addView(audioButton)
   cropButton=actionButton("Обрезка: выкл.",Color.rgb(33,42,59),blue,1.5f) {
-   cropped=!cropped
-   playerView.resizeMode=if(cropped)AspectRatioFrameLayout.RESIZE_MODE_ZOOM
-    else AspectRatioFrameLayout.RESIZE_MODE_FIT
-   cropButton.text=if(cropped)"Обрезка: вкл." else "Обрезка: выкл."
+   setCrop(!cropped)
   }
   val secondary=LinearLayout(this).apply {
    orientation=LinearLayout.HORIZONTAL
@@ -241,14 +244,45 @@ class PlayerActivity : Activity() {
   panel.addView(controls)
   panel.addView(secondary)
   controlPanel=panel
-  root.addView(panel,LinearLayout.LayoutParams(-1,dp(172)))
-  setContentView(root)
-  if(savedInstanceState?.getBoolean("fullscreen")==true)setFullscreen(true)
-  if(savedInstanceState?.getBoolean("cropped")==true) {
-   cropped=true
-   playerView.resizeMode=AspectRatioFrameLayout.RESIZE_MODE_ZOOM
-   cropButton.text="Обрезка: вкл."
+  rootLayout.addView(panel,LinearLayout.LayoutParams(-1,dp(172)))
+  bottomSpacer=View(this)
+  rootLayout.addView(bottomSpacer,LinearLayout.LayoutParams(-1,0,1f))
+  fullscreenControls=LinearLayout(this).apply{
+   orientation=LinearLayout.HORIZONTAL
+   gravity=Gravity.CENTER_VERTICAL
+   setPadding(dp(5),dp(4),dp(5),dp(8))
+   setBackgroundColor(Color.argb(190,10,15,25))
+   visibility=View.GONE
   }
+  fullscreenControls.addView(actionButton("−10",surface,blue,0.7f){
+   player?.let{it.seekTo((it.currentPosition-10000).coerceAtLeast(0))}
+  })
+  fullscreenControls.addView(actionButton("Ⅱ / ▶",pink,pink,0.8f){
+   player?.let{if(it.isPlaying)it.pause() else it.play()}
+  })
+  fullscreenControls.addView(actionButton("+10",surface,blue,0.7f){
+   player?.let{it.seekTo(if(it.duration>0)(it.currentPosition+10000).coerceAtMost(it.duration) else it.currentPosition+10000)}
+  })
+  fullscreenControls.addView(actionButton("Кач.",surface,blue,1f){
+   showTrackSelection(C.TRACK_TYPE_VIDEO,"Качество видео")
+  })
+  fullscreenControls.addView(actionButton("Звук",surface,pink,1f){
+   showTrackSelection(C.TRACK_TYPE_AUDIO,"Аудиодорожка")
+  })
+  fullscreenControls.addView(actionButton("Обрезать",surface,blue,1.2f){
+   setCrop(!cropped)
+  })
+  fullscreenControls.addView(actionButton("↓",surface,pink,0.5f){
+   requestDownload()
+  })
+  videoStage.addView(fullscreenControls,FrameLayout.LayoutParams(-1,dp(60),Gravity.BOTTOM))
+  fullscreenControls.bringToFront()
+  fullscreenButton.bringToFront()
+  setContentView(rootLayout)
+  pendingDownloadQuality=savedInstanceState?.getString("download_quality")
+  pendingAudioLanguage=savedInstanceState?.getString("download_audio")
+  if(savedInstanceState?.getBoolean("fullscreen")==true)setFullscreen(true)
+  if(savedInstanceState?.getBoolean("cropped")==true)setCrop(true)
 
   val headers=linkedMapOf<String,String>()
   if(referer.startsWith("http")) {
@@ -298,7 +332,7 @@ class PlayerActivity : Activity() {
      })
      p.setMediaItem(MediaItem.fromUri(url))
      p.prepare()
-     val savedPosition=savedInstanceState?.getLong("player_position") ?: 0L
+     val savedPosition=savedInstanceState?.getLong("player_position") ?: intent.getLongExtra("start_position",0L)
      if(savedPosition>0L)p.seekTo(savedPosition)
      p.playWhenReady=savedInstanceState?.getBoolean("player_playing") ?: true
     }
@@ -308,19 +342,66 @@ class PlayerActivity : Activity() {
   }
  }
 
+ private fun setCrop(value:Boolean){
+  cropped=value
+  playerView.resizeMode=if(fullscreen && cropped)
+   AspectRatioFrameLayout.RESIZE_MODE_ZOOM else AspectRatioFrameLayout.RESIZE_MODE_FIT
+  cropButton.text=if(cropped)"Обрезка: вкл." else "Обрезка: выкл."
+ }
+
  private fun setFullscreen(enable:Boolean) {
   fullscreen=enable
-  if(!::headerContainer.isInitialized || !::controlPanel.isInitialized)return
+  if(!::rootLayout.isInitialized || !::videoStage.isInitialized || !::fullscreenControls.isInitialized)return
   headerContainer.visibility=if(enable)View.GONE else View.VISIBLE
   controlPanel.visibility=if(enable)View.GONE else View.VISIBLE
+  bottomSpacer.visibility=if(enable)View.GONE else View.VISIBLE
+  fullscreenControls.visibility=if(enable)View.VISIBLE else View.GONE
   fullscreenButton.text=if(enable)"⤡" else "⛶"
-  window.decorView.systemUiVisibility=if(enable) {
-   (View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
-    View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
-    View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_LAYOUT_STABLE)
-  } else 0
+  rootLayout.setPadding(if(enable)0 else dp(12),if(enable)0 else dp(8),
+   if(enable)0 else dp(12),if(enable)0 else dp(12))
+  videoStage.background=if(enable)android.graphics.drawable.ColorDrawable(Color.BLACK)
+   else rounded(Color.BLACK,22,Color.rgb(48,68,91))
+  videoStage.clipToOutline=!enable
+  videoStage.elevation=if(enable)0f else dp(3).toFloat()
+  val portraitHeight=((resources.displayMetrics.widthPixels-dp(24))*9/16).coerceAtLeast(dp(160))
+  videoStage.layoutParams=LinearLayout.LayoutParams(-1,if(enable)0 else portraitHeight,if(enable)1f else 0f).apply{
+   if(!enable)setMargins(0,dp(4),0,dp(12))
+  }
+  playerView.resizeMode=if(enable && cropped)AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+   else AspectRatioFrameLayout.RESIZE_MODE_FIT
+  val flags=View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
+   View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
+   View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+  window.decorView.systemUiVisibility=if(enable)flags else 0
+  if(android.os.Build.VERSION.SDK_INT>=28) {
+   val params=window.attributes
+   params.layoutInDisplayCutoutMode=if(enable)
+    android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+    else android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT
+   window.attributes=params
+  }
   requestedOrientation=if(enable)ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
    else ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+ }
+
+ override fun onConfigurationChanged(newConfig:android.content.res.Configuration){
+  super.onConfigurationChanged(newConfig)
+  if(::videoStage.isInitialized && !fullscreen) {
+   val portraitHeight=((resources.displayMetrics.widthPixels-dp(24))*9/16).coerceAtLeast(dp(160))
+   videoStage.layoutParams=LinearLayout.LayoutParams(-1,portraitHeight).apply{
+    setMargins(0,dp(4),0,dp(12))
+   }
+  }
+ }
+
+ override fun onWindowFocusChanged(hasFocus:Boolean){
+  super.onWindowFocusChanged(hasFocus)
+  if(hasFocus && fullscreen){
+   window.decorView.systemUiVisibility=View.SYSTEM_UI_FLAG_FULLSCREEN or
+    View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
+    View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or
+    View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+  }
  }
 
  private fun requestDownload() {
@@ -331,7 +412,14 @@ class PlayerActivity : Activity() {
   val selectedHeight=selected?.let{group->
    (0 until group.length).firstOrNull{group.isTrackSelected(it)}?.let{group.getTrackFormat(it).height}
   }?.takeIf{it>0}
-  pendingDownloadQuality=selectedHeight?.let{"${it}p"}
+  val decoded=player?.videoSize?.height?.takeIf{it>0}
+  pendingDownloadQuality=(decoded?:selectedHeight)?.let{"${it}p"}
+  pendingAudioLanguage=player?.currentTracks?.groups
+   ?.firstOrNull{it.type==C.TRACK_TYPE_AUDIO && it.isSelected}
+   ?.let{group->
+    (0 until group.length).firstOrNull{group.isTrackSelected(it)}
+     ?.let{group.getTrackFormat(it).language}
+   }
   val base=(intent.getStringExtra("title") ?: "V&R video")
    .replace(Regex("[^\\p{L}\\p{N}._ -]"),"_").trim().take(56).ifBlank{"VRBrowser"}
   val suffix=pendingDownloadQuality?.let{"_$it"}.orEmpty()
@@ -365,7 +453,8 @@ class PlayerActivity : Activity() {
      val id=System.currentTimeMillis().toString()
      TransferStore.update(this,id,name,"Подготовка",0,0,target.toString(),
       source=url,referer=intent.getStringExtra("referer").orEmpty(),
-      userAgent=intent.getStringExtra("user_agent").orEmpty(),quality=pendingDownloadQuality)
+      userAgent=intent.getStringExtra("user_agent").orEmpty(),quality=pendingDownloadQuality,
+      audioSource=intent.getStringExtra("audio_source"),audioLanguage=pendingAudioLanguage)
      if(url.contains(".m3u8",true))HlsDownloader.start(this,id)
      else DirectDownloader.start(this,id)
      startActivity(Intent(this,LibraryActivity::class.java))
@@ -474,6 +563,8 @@ class PlayerActivity : Activity() {
  }
 
  override fun onSaveInstanceState(outState:Bundle) {
+  outState.putString("download_quality",pendingDownloadQuality)
+  outState.putString("download_audio",pendingAudioLanguage)
   outState.putBoolean("fullscreen",fullscreen)
   outState.putBoolean("cropped",cropped)
   outState.putLong("player_position",player?.currentPosition ?: 0L)

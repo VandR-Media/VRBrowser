@@ -10,7 +10,12 @@ import android.webkit.WebView
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
+import androidx.media3.common.TrackSelectionOverride
+import androidx.media3.common.Tracks
+import android.widget.Toast
+import android.app.AlertDialog
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
@@ -30,7 +35,8 @@ class InlinePlayerController(
  private val source:String,
  private val referer:String,
  private val userAgent:String,
- private val fullscreen:()->Unit,
+ private val fullscreen:(Long)->Unit,
+ private val download:(String?)->Unit,
  private val closed:()->Unit
 ) {
  private val density=activity.resources.displayMetrics.density
@@ -39,6 +45,7 @@ class InlinePlayerController(
  private var host:FrameLayout?=null
  private var released=false
  private var attached=false
+ private var playControl:TextView?=null
  private val accent=Color.rgb(39,190,245)
 
  private fun rounded(bg:Int,stroke:Int):GradientDrawable=GradientDrawable().apply {
@@ -104,7 +111,7 @@ class InlinePlayerController(
    elevation=dp(6).toFloat()
   }
   val video=PlayerView(activity).apply {
-   useController=true
+   useController=false
    setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
    player=p
   }
@@ -123,11 +130,45 @@ class InlinePlayerController(
    setOnClickListener{onClick()}
    bar.addView(this,LinearLayout.LayoutParams(dp(width),dp(36)))
   }
-  control("V&R",47){fullscreen()}
-  control("⛶",42){fullscreen()}
+  control("V&R",47){showTracks(C.TRACK_TYPE_VIDEO)}
+  control("⛶",42){fullscreen(player?.currentPosition ?: 0L)}
   control("×",42){release();closed()}
   frame.addView(bar,FrameLayout.LayoutParams(-2,dp(44),Gravity.TOP or Gravity.END).apply {
    topMargin=dp(3);rightMargin=dp(3)
+  })
+  val mediaBar=LinearLayout(activity).apply {
+   orientation=LinearLayout.HORIZONTAL
+   gravity=Gravity.CENTER_VERTICAL
+   setPadding(dp(5),dp(2),dp(5),dp(4))
+   background=rounded(Color.argb(224,22,31,48),accent)
+  }
+  fun mediaAction(title:String,weight:Float,onAction:()->Unit):TextView {
+   return TextView(activity).apply {
+    text=title
+    textSize=13f
+    setTextColor(Color.WHITE)
+    gravity=Gravity.CENTER
+    contentDescription=title
+    setOnClickListener{onAction()}
+    mediaBar.addView(this,LinearLayout.LayoutParams(0,dp(37),weight).apply{
+     setMargins(dp(2),0,dp(2),0)
+    })
+   }
+  }
+  mediaAction("−10",0.8f){player?.let{it.seekTo((it.currentPosition-10000).coerceAtLeast(0))}}
+  playControl=mediaAction("Ⅱ",0.9f){player?.let{if(it.isPlaying)it.pause() else it.play()}}
+  mediaAction("+10",0.8f){player?.let{it.seekTo(it.currentPosition+10000)}}
+  mediaAction("Кач.",1f){showTracks(C.TRACK_TYPE_VIDEO)}
+  mediaAction("Звук",1f){showTracks(C.TRACK_TYPE_AUDIO)}
+  mediaAction("↓",0.7f){download(player?.videoSize?.height?.takeIf{it>0}?.let{"${it}p"})}
+  frame.addView(mediaBar,FrameLayout.LayoutParams(-1,dp(48),Gravity.BOTTOM))
+  p.addListener(object:androidx.media3.common.Player.Listener{
+   override fun onIsPlayingChanged(isPlaying:Boolean){
+    playControl?.text=if(isPlaying)"Ⅱ" else "▶"
+   }
+   override fun onPlayerError(error:androidx.media3.common.PlaybackException){
+    Toast.makeText(activity,error.message ?: "Не удалось открыть поток",Toast.LENGTH_LONG).show()
+   }
   })
   host=frame
   pages.addView(frame,FrameLayout.LayoutParams(dp(320),dp(180)))
@@ -163,6 +204,46 @@ class InlinePlayerController(
   frame.visibility=if(left+w<=0||top+h<=0||left>=pages.width||top>=pages.height)View.GONE else View.VISIBLE
   frame.layoutParams=FrameLayout.LayoutParams(w.coerceAtLeast(dp(200)),h.coerceAtLeast(dp(120)),Gravity.TOP or Gravity.START).apply {
    leftMargin=left;topMargin=top
+  }
+ }
+
+ private fun showTracks(trackType:Int){
+  val p=player?:return
+  try{
+   data class Choice(val group:Tracks.Group,val index:Int,val title:String,val selected:Boolean)
+   val options=p.currentTracks.groups.filter{it.type==trackType}.flatMap{group->
+    (0 until group.length).filter{group.isTrackSupported(it)}.map{index->
+     val format=group.getTrackFormat(index)
+     val title=if(trackType==C.TRACK_TYPE_VIDEO){
+      (format.height.takeIf{it>0}?.let{"${it}p"}?:"Авто")+
+       (format.bitrate.takeIf{it>0}?.let{" · ${it/1000} кбит/с"}?:"")
+     }else{
+      format.label?.takeIf{it.isNotBlank()} ?: format.language?.takeIf{it!="und"} ?: "Звук ${index+1}"
+     }
+     Choice(group,index,title,group.isTrackSelected(index))
+    }
+   }
+   if(options.isEmpty()){
+    Toast.makeText(activity,"Нет доступных дорожек",Toast.LENGTH_SHORT).show()
+    return
+   }
+   AlertDialog.Builder(activity,R.style.VRDialog)
+    .setTitle(if(trackType==C.TRACK_TYPE_VIDEO)"Качество" else "Озвучка")
+    .setSingleChoiceItems(options.map{it.title}.toTypedArray(),options.indexOfFirst{it.selected}){dialog,which->
+     val option=options[which]
+     p.trackSelectionParameters=p.trackSelectionParameters.buildUpon()
+      .clearOverridesOfType(trackType)
+      .setOverrideForType(TrackSelectionOverride(option.group.mediaTrackGroup,listOf(option.index)))
+      .build()
+     dialog.dismiss()
+    }
+    .setNeutralButton("Авто"){dialog,_->
+     p.trackSelectionParameters=p.trackSelectionParameters.buildUpon()
+      .clearOverridesOfType(trackType).build()
+     dialog.dismiss()
+    }.setNegativeButton("Закрыть",null).show()
+  }catch(e:Exception){
+   Toast.makeText(activity,e.message ?: "Ошибка выбора дорожки",Toast.LENGTH_LONG).show()
   }
  }
 
