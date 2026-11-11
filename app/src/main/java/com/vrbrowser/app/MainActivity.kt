@@ -450,16 +450,12 @@ class MainActivity : Activity() {
      if(seconds>0)duration=(seconds*1000).toLong()
     }
    } catch(_:Exception) { }
-   val estimate=estimateHls(url,referer,userAgent)
-   duration=duration ?: estimate.first
-   // A small sample of CDN segments underestimates variable-bit-rate HLS.
-   // Show unknown rather than promising a specific wrong download size.
+   // Do not calculate size from a few HLS chunks: the answer can differ by 50% or more.
+   // Probe the *actual bytes* even when the manifest declares a quality.
    estimatedBytes=null
-   if(quality==null) {
-    val probe=probeHlsResolution(url,referer,userAgent)
-    quality=probe.first
-    frame=probe.second
-   }
+   val probe=probeHlsResolution(url,referer,userAgent)
+   if(probe.first!=null)quality=probe.first
+   frame=probe.second
   } else if(!url.contains(".mpd",true)) {
    estimatedBytes=remoteLength(url,referer,userAgent)
    var retriever:android.media.MediaMetadataRetriever?=null
@@ -469,7 +465,7 @@ class MainActivity : Activity() {
     CookieManager.getInstance().getCookie(url)?.takeIf{it.isNotBlank()}?.let{headers["Cookie"]=it}
     retriever=android.media.MediaMetadataRetriever()
     retriever.setDataSource(url,headers)
-    duration=retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()?.div(1000)
+    duration=retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()
     val height=retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull()
     quality=height?.takeIf{it>0}?.let{"${it}p"}
     frame=retriever.getFrameAtTime(1000000L,android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
@@ -586,13 +582,22 @@ class MainActivity : Activity() {
        val details=inspectMedia(url,referer,userAgent)
        runOnUiThread {
         if (isFinishing || isDestroyed) return@runOnUiThread
-        val resolution=details.quality ?: entry.quality ?: "Качество неизвестно"
+        val verified=details.quality
+        val declared=entry.quality
+        val resolution=verified ?: declared ?: "Качество неизвестно"
+        val verifiedLabel=when {
+         verified!=null && declared!=null && verified!=declared ->
+          "${verified} (заявлено ${declared})"
+         verified!=null -> verified
+         declared!=null -> "${declared} (не проверено)"
+         else -> "Качество неизвестно"
+        }
         knownQualities[url]=resolution
         download.contentDescription="Скачать $resolution"
         download.setOnClickListener { confirmDownload(url,"video","","",resolution) }
-        info.setOnClickListener { showMediaActions(url,"${index+1}. $resolution") }
+        info.setOnClickListener { showMediaActions(url,"${index+1}. $verifiedLabel") }
         val size=details.estimatedBytes
-        metadata.text="${mediaType(url).substringBefore(" · ")} · $resolution · ${details.durationMs?.let { prettyDuration(it) } ?: "Длительность неизвестна"} · ${prettySize(size)}"
+        metadata.text="${mediaType(url).substringBefore(" · ")} · $verifiedLabel · ${details.durationMs?.let { prettyDuration(it) } ?: "Длительность неизвестна"} · ${prettySize(size)}"
         details.frame?.let { bitmap ->
          thumb.setPadding(0,0,0,0); thumb.scaleType=ImageView.ScaleType.CENTER_CROP
          thumb.setImageBitmap(bitmap)
