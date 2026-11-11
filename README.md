@@ -1,34 +1,38 @@
-# V&R Browser 1.0.7
+# V&R Browser 1.0.8
 
-Android browser for Huawei / Android devices. Kotlin, WebView and Media3.
+Android browser with a native Media3 player, HLS media detection, persistent download library, an in-app ad blocker and a dark cyan/magenta visual identity.
 
-## 1.0.7 — stable media pipeline
+## Repository layout
 
-- HLS master playlists are expanded recursively into leaf variants. Ambiguous variants are never silently mapped to the highest bitrate.
-- Before saving an HLS download, the app compares the selected resolution with the actual video track when the container exposes it. A mismatch is reported instead of saving the wrong quality.
-- Finite, clear MPEG-TS HLS downloads resume from complete segments after pause, network loss or process restart.
-- HLS segments are remuxed into MP4 by copying supported H.264/H.265 video and AAC audio samples. The app does not decode and re-encode the full video, reducing memory use and avoiding the device-dependent encoder crash seen during the previous MP4 export.
-- The MP4 is written to the selected destination only after the local MP4 has been finalized and validated. Progress does not reach 100% before the final copy succeeds.
-- The native V&R Player has a custom dark/neon interface and in-app quality/audio selection menus. It receives the page Referer, User-Agent and cookies.
-- Ad filtering uses AdblockAndroid with AdGuard Base, EasyPrivacy Lite, AdGuard Tracking Protection and AdGuard Annoyances, alongside the host-level blocker. Filter subscriptions are restored idempotently if an earlier download was interrupted.
-- WebView renderer termination is handled by recreating the affected tab instead of leaving the browser unusable.
+This repository contains **one complete, canonical, directly buildable Android project**.
+It is built from `app/` and Gradle files at the root. All themes, icons, wallpapers and Kotlin sources are tracked in Git. No ZIP archive or older version is used as the source of truth. Signed APK and full source ZIP files are **CI artifacts**, not tracked repository files.
 
-## HLS and media limitations
+## Fixes in 1.0.8
 
-- HLS downloads support finite, unencrypted MPEG-TS playlists. Live HLS, DRM, AES-128, fMP4/CMAF, byte-range playlists and DASH downloads are not supported.
-- MP4 remuxing supports H.264/H.265 video and AAC audio without re-encoding. Unsupported codecs produce an explicit error; the app does not mislabel a TS file as MP4.
-- Alternate audio renditions can be selected in the native player when the master playlist publishes them. Downloading a separately hosted alternate audio playlist together with the video is not yet implemented.
-- A browser filter can block network ad requests and cosmetic ads, but cannot reliably remove advertisements stitched directly into the HLS video segments. Blocking those segments can break playback.
-- The media finder displays estimated HLS sizes. The download library reports bytes actually written.
+- Startup: register the crash recorder early, run filter subscription updates and transfer recovery off the UI thread, and guard browser lifecycle callbacks.
+- HLS downloads: restore complete, validated segments after pause and resume; derive the manifest identity from stable media segment paths instead of expiring CDN auth tokens.
+- MP4: explicitly select the tracks from `MediaExtractor` before remuxing samples into `MediaMuxer`. This fixes the specific error where tracks were recognized but no samples were read. Remuxes supported AVC/HEVC and AAC without re-encoding; does not relabel TS as MP4.
+- Quality: avoid silent substitution of a different HLS variant and check actual height where Android can probe it. Estimated HLS sizes remain approximate.
+- V&R Player: fullscreen, fit/crop toggle, in-player download with location confirmation, track quality/audio selectors, and a native inline player surface that can cover the website's video element after detecting a qualifying HLS playlist.
+- Design: brighter toolbar buttons and a size-constrained logo-watermark dialog background.
+- Ad filtering: combined AdblockAndroid and V&R Shield, with filter updates in the background. When inline playback succeeds, the original site iframe is suspended so its embedded ads do not continue playing in parallel. Ads multiplexed directly into media streams are not reliably removable.
 
-## Build and release
+## Supported downloads and limitations
 
-GitHub Actions retains the complete Android resource tree from the existing source bundle, overlays the tracked Kotlin sources, manifest and Gradle configuration, then builds and signs the 1.0.7 APK. The workflow uploads both the signed APK and the merged complete source archive.
+Finite, unencrypted MPEG-TS HLS playlists are supported. Live playlists, encrypted streams, DRM, fMP4/CMAF and byte-range segment downloads are not supported. MP4 export requires supported video/audio codecs; unsupported streams show an error rather than producing a broken file. Downloading separate alternate audio renditions with video is not yet implemented.
 
-Required GitHub Actions secrets:
-- VR_KEYSTORE_BASE64 (or legacy VR_KEYSTORE_B64)
-- VR_KEYSTORE_PASSWORD
-- VR_KEY_ALIAS
-- VR_KEY_PASSWORD
+**Validation status:** the GitHub Actions pipeline checks compilation, Android package metadata and release APK signature. It cannot verify runtime stability, inline placement on every site, or final MP4 playback on a Huawei device. Those require device testing.
 
-Keep using the same release keystore for every update. Changing the signing certificate prevents Android from installing the new APK over an existing installation.
+## Release signing
+
+Create these repository Actions secrets:
+- `VR_KEYSTORE_BASE64` or `VR_KEYSTORE_B64`
+- `VR_KEYSTORE_PASSWORD`
+- `VR_KEY_ALIAS`
+- `VR_KEY_PASSWORD`
+
+The build uses the existing release signing certificate. Keep the JKS private and back it up securely. A different signing key prevents normal in-place Android APK upgrades.
+
+## CI artifacts
+
+GitHub Actions uploads `VRBrowser-1.0.8-SIGNED-RELEASE` (the signed APK) and `VRBrowser-1.0.8-SOURCE` (the exact tracked source archive). The repository does not commit APKs, keystores or ZIP builds.
