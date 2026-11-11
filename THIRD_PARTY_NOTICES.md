@@ -3,7 +3,7 @@
 ## AdblockAndroid
 
 - Project: https://github.com/Edsuns/AdblockAndroid
-- Pinned source commit: https://github.com/Edsuns/AdblockAndroid/tree/a585487eb19328f635a5b7b983fa38d4c97f2bc8
+- Source commit used by the last verified snapshot build: https://github.com/Edsuns/AdblockAndroid/tree/a585487eb19328f635a5b7b983fa38d4c97f2bc8
 - License: GNU Lesser General Public License, version 2.1 (LGPL-2.1)
 - Full license text: licenses/AdblockAndroid-LICENSE.txt
 
