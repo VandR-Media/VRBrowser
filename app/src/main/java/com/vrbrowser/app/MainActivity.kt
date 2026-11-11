@@ -265,11 +265,14 @@ class MainActivity : Activity() {
      .putExtra("user_agent",userAgent)
      .putExtra("title",web.title ?: "Видео онлайн")
     val controller=InlinePlayerController(this,pages,web,source,referer,userAgent,
-     fullscreen={
+     fullscreen={position->
       inlinePlayer?.release(false)
       inlinePlayer=null
       playerButton.visibility=View.VISIBLE
-      startActivity(fullscreen)
+      startActivity(fullscreen.putExtra("start_position",position))
+     },
+     download={quality->
+      confirmDownload(source,userAgent,"video/mp4","",quality)
      },
      closed={
       inlinePlayer=null
