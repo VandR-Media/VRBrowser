@@ -360,7 +360,7 @@ class PlayerActivity : Activity() {
 
  override fun onDestroy() {
   handler.removeCallbacks(progressUpdater)
-  playerView.player=null
+  if(::playerView.isInitialized)playerView.player=null
   player?.release()
   player=null
   trackSelector=null
