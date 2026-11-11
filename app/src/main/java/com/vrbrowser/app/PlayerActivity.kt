@@ -1,6 +1,8 @@
 package com.vrbrowser.app
 
 import android.app.Activity
+import android.content.Intent
+import android.content.pm.ActivityInfo
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -49,6 +51,13 @@ class PlayerActivity : Activity() {
  private lateinit var seekBar:SeekBar
  private lateinit var positionLabel:TextView
  private lateinit var durationLabel:TextView
+ private lateinit var headerContainer:LinearLayout
+ private lateinit var controlPanel:LinearLayout
+ private lateinit var fullscreenButton:TextView
+ private lateinit var cropButton:TextView
+ private var fullscreen=false
+ private var cropped=false
+ private var pendingDownloadQuality:String?=null
  private var seeking=false
  private val handler=Handler(Looper.getMainLooper())
  private val progressUpdater=object:Runnable {
@@ -116,6 +125,7 @@ class PlayerActivity : Activity() {
    addView(label("V&R PLAYER",12f,blue,true))
    addView(label(intent.getStringExtra("title") ?: "Видео онлайн",14f,Color.WHITE,true))
   },LinearLayout.LayoutParams(0,-2,1f))
+  headerContainer=header
   root.addView(header,LinearLayout.LayoutParams(-1,dp(62)))
 
   val stage=FrameLayout(this).apply {
@@ -131,6 +141,18 @@ class PlayerActivity : Activity() {
    setKeepContentOnPlayerReset(true)
   }
   stage.addView(playerView,FrameLayout.LayoutParams(-1,-1))
+  fullscreenButton=TextView(this).apply {
+   text="⛶"
+   textSize=25f
+   gravity=Gravity.CENTER
+   setTextColor(Color.WHITE)
+   background=rounded(Color.rgb(29,38,57),15,blue)
+   contentDescription="Полноэкранный режим"
+   setOnClickListener{setFullscreen(!fullscreen)}
+  }
+  stage.addView(fullscreenButton,FrameLayout.LayoutParams(dp(48),dp(44),Gravity.TOP or Gravity.END).apply{
+   setMargins(0,dp(10),dp(10),0)
+  })
   root.addView(stage,LinearLayout.LayoutParams(-1,0,1f).apply {
    setMargins(0,dp(4),0,dp(12))
   })
@@ -201,9 +223,32 @@ class PlayerActivity : Activity() {
   audioButton.alpha=0.45f
   controls.addView(qualityButton)
   controls.addView(audioButton)
+  cropButton=actionButton("Обрезка: выкл.",Color.rgb(33,42,59),blue,1.5f) {
+   cropped=!cropped
+   playerView.resizeMode=if(cropped)AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+    else AspectRatioFrameLayout.RESIZE_MODE_FIT
+   cropButton.text=if(cropped)"Обрезка: вкл." else "Обрезка: выкл."
+  }
+  val secondary=LinearLayout(this).apply {
+   orientation=LinearLayout.HORIZONTAL
+   gravity=Gravity.CENTER
+   setPadding(0,dp(9),0,0)
+  }
+  secondary.addView(cropButton)
+  secondary.addView(actionButton("↓ Скачать",Color.rgb(33,42,59),pink,1.15f) {
+   requestDownload()
+  })
   panel.addView(controls)
-  root.addView(panel,LinearLayout.LayoutParams(-1,dp(112)))
+  panel.addView(secondary)
+  controlPanel=panel
+  root.addView(panel,LinearLayout.LayoutParams(-1,dp(172)))
   setContentView(root)
+  if(savedInstanceState?.getBoolean("fullscreen")==true)setFullscreen(true)
+  if(savedInstanceState?.getBoolean("cropped")==true) {
+   cropped=true
+   playerView.resizeMode=AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+   cropButton.text="Обрезка: вкл."
+  }
 
   val headers=linkedMapOf<String,String>()
   if(referer.startsWith("http")) {
@@ -261,6 +306,77 @@ class PlayerActivity : Activity() {
    android.util.Log.e("V&R Player","Player initialization failed",error)
    Toast.makeText(this,error.message ?: "Ошибка запуска плеера",Toast.LENGTH_LONG).show()
   }
+ }
+
+ private fun setFullscreen(enable:Boolean) {
+  fullscreen=enable
+  if(!::headerContainer.isInitialized || !::controlPanel.isInitialized)return
+  headerContainer.visibility=if(enable)View.GONE else View.VISIBLE
+  controlPanel.visibility=if(enable)View.GONE else View.VISIBLE
+  fullscreenButton.text=if(enable)"⤡" else "⛶"
+  window.decorView.systemUiVisibility=if(enable) {
+   (View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
+    View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
+    View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_LAYOUT_STABLE)
+  } else 0
+  requestedOrientation=if(enable)ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+   else ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+ }
+
+ private fun requestDownload() {
+  val url=intent.getStringExtra("url").orEmpty()
+  if(url.isBlank())return
+  val selected=player?.currentTracks?.groups
+   ?.firstOrNull{it.type==C.TRACK_TYPE_VIDEO && it.isSelected}
+  val selectedHeight=selected?.let{group->
+   (0 until group.length).firstOrNull{group.isTrackSelected(it)}?.let{group.getTrackFormat(it).height}
+  }?.takeIf{it>0}
+  pendingDownloadQuality=selectedHeight?.let{"${it}p"}
+  val base=(intent.getStringExtra("title") ?: "V&R video")
+   .replace(Regex("[^\\p{L}\\p{N}._ -]"),"_").trim().take(56).ifBlank{"VRBrowser"}
+  val suffix=pendingDownloadQuality?.let{"_$it"}.orEmpty()
+  val name="$base$suffix.${if(url.contains(".m3u8",true))"mp4" else "mp4"}"
+  try {
+   startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+    addCategory(Intent.CATEGORY_OPENABLE)
+    type="video/mp4"
+    putExtra(Intent.EXTRA_TITLE,name)
+   },5107)
+  } catch(e:Exception) { Toast.makeText(this,"Выбор места недоступен: ${e.message}",Toast.LENGTH_LONG).show() }
+ }
+
+ override fun onActivityResult(requestCode:Int,resultCode:Int,data:Intent?) {
+  super.onActivityResult(requestCode,resultCode,data)
+  if(requestCode!=5107)return
+  val target=data?.data ?: return
+  if(resultCode!=RESULT_OK)return
+  val url=intent.getStringExtra("url") ?: return
+  val sourceTitle=intent.getStringExtra("title") ?: "V&R video"
+  val name=(sourceTitle.replace(Regex("[^\\p{L}\\p{N}._ -]"),"_").trim().take(56).ifBlank{"VRBrowser"})+
+   (pendingDownloadQuality?.let{"_$it"} ?: "")+".mp4"
+  android.app.AlertDialog.Builder(this,R.style.VRDialog)
+   .setTitle("Подтвердить загрузку")
+   .setMessage("Сохранить файл $name в выбранную папку?")
+   .setNegativeButton("Отмена",null)
+   .setPositiveButton("Скачать") { _,_->
+    try {
+     val flags=(data.flags and (Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION))
+     try{if(flags!=0)contentResolver.takePersistableUriPermission(target,flags)}catch(_:Exception){}
+     val id=System.currentTimeMillis().toString()
+     TransferStore.update(this,id,name,"Подготовка",0,0,target.toString(),
+      source=url,referer=intent.getStringExtra("referer").orEmpty(),
+      userAgent=intent.getStringExtra("user_agent").orEmpty(),quality=pendingDownloadQuality)
+     if(url.contains(".m3u8",true))HlsDownloader.start(this,id)
+     else DirectDownloader.start(this,id)
+     startActivity(Intent(this,LibraryActivity::class.java))
+    }catch(e:Exception){
+     Toast.makeText(this,e.message ?: "Ошибка скачивания",Toast.LENGTH_LONG).show()
+    }
+   }.show()
+ }
+
+ override fun onBackPressed() {
+  if(fullscreen)setFullscreen(false)else super.onBackPressed()
  }
 
  private fun formatTime(ms:Long):String {
@@ -358,6 +474,8 @@ class PlayerActivity : Activity() {
  }
 
  override fun onSaveInstanceState(outState:Bundle) {
+  outState.putBoolean("fullscreen",fullscreen)
+  outState.putBoolean("cropped",cropped)
   outState.putLong("player_position",player?.currentPosition ?: 0L)
   outState.putBoolean("player_playing",player?.playWhenReady ?: false)
   super.onSaveInstanceState(outState)
