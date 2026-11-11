@@ -363,8 +363,12 @@ object HlsDownloader {
    val fingerprint=MessageDigest.getInstance("SHA-256")
     .digest((initial.source.substringBefore('?')+"\n"+mediaSequence+"\n"+stableSegments).toByteArray(Charsets.UTF_8))
     .joinToString(""){"%02x".format(it.toInt() and 255)}
+   // v1.0.8 recorded the same paths with an empty media-sequence due to a regex bug.
+   val legacyFingerprint=MessageDigest.getInstance("SHA-256")
+    .digest((initial.source.substringBefore('?')+"\n\n"+stableSegments).toByteArray(Charsets.UTF_8))
+    .joinToString(""){"%02x".format(it.toInt() and 255)}
    val marker=File(folder,"manifest.sha256")
-   if(marker.exists() && marker.readText()!=fingerprint){
+   if(marker.exists() && marker.readText()!=fingerprint && marker.readText()!=legacyFingerprint){
     throw IOException("HLS-плейлист изменился. Уже скачанные сегменты сохранены, но их нельзя безопасно объединить с другим потоком.")
    }
    marker.writeText(fingerprint)
