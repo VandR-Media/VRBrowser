@@ -146,13 +146,26 @@ class MainActivity : Activity() {
  private fun navigate(raw:String) { val t=raw.trim(); if(t.isEmpty())return; val u=if(t.startsWith("https://")||t.startsWith("http://")) t else if(t.contains('.')&&!t.contains(' ')) "https://$t" else "https://www.google.com/search?q=${URLEncoder.encode(t,"UTF-8")}"; active().loadUrl(u) }
  private fun openDetectedPlayer() {
   val urls=synchronized(detected){detected.toList()}
-  val source=urls.lastOrNull{it.contains(".m3u8",true)} ?: urls.lastOrNull{Regex("\\.(mp4|m4v|webm)(\\?|#|$)",RegexOption.IGNORE_CASE).containsMatchIn(it)}
-  if(source.isNullOrBlank()) { Toast.makeText(this,"Поток ещё не найден. Запусти видео на странице и попробуй снова.",Toast.LENGTH_LONG).show(); return }
+  val hls=urls.filter{it.contains(".m3u8",true)}
+  val direct=urls.lastOrNull{Regex("\\.(mp4|m4v|webm)(\\?|#|$)",RegexOption.IGNORE_CASE).containsMatchIn(it)}
+  if(hls.isEmpty() && direct==null) { Toast.makeText(this,"Поток ещё не найден. Запусти видео на странице и попробуй снова.",Toast.LENGTH_LONG).show(); return }
   val web=active()
-  startActivity(Intent(this,PlayerActivity::class.java)
-   .putExtra("url",source)
-   .putExtra("referer",web.url.orEmpty())
-   .putExtra("user_agent",web.settings.userAgentString))
+  Thread {
+   val master=hls.asReversed().firstOrNull { candidate ->
+    try {
+     val body=readHlsPlaylist(candidate,web.url.orEmpty())
+     body.contains("#EXT-X-STREAM-INF") || body.contains("#EXT-X-MEDIA:TYPE=AUDIO")
+    } catch (_:Exception) { false }
+   }
+   val source=master ?: hls.lastOrNull() ?: direct
+   runOnUiThread {
+    if(source.isNullOrBlank() || isFinishing) return@runOnUiThread
+    startActivity(Intent(this,PlayerActivity::class.java)
+     .putExtra("url",source)
+     .putExtra("referer",web.url.orEmpty())
+     .putExtra("user_agent",web.settings.userAgentString))
+   }
+  }.start()
  }
  private fun scanPage(web:WebView?) {
   if(web==null)return
@@ -316,7 +329,7 @@ class MainActivity : Activity() {
      val child=lines.drop(index+1).firstOrNull{it.isNotBlank()&&!it.trim().startsWith("#")}
      if(child==null)null else {
       val height=Regex("""RESOLUTION=\d+x(\d+)""").find(tag)?.groupValues?.get(1)?.toIntOrNull()
-      val name=Regex("""NAME="([^"]+)"""").find(tag)?.groupValues?.get(1)
+      val name=Regex("NAME=\\"([^\\"]+)\\"").find(tag)?.groupValues?.get(1)
       val namedQuality=name?.let { raw ->
        val match=Regex("""(?i)(\d{3,4})p?""").find(raw)
        match?.let{"${it.groupValues[1]}p"} ?: raw.take(40)

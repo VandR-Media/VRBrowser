@@ -45,8 +45,8 @@ class PlayerActivity : Activity() {
    orientation=LinearLayout.HORIZONTAL; gravity=Gravity.CENTER
    setPadding(dp(8),dp(5),dp(8),dp(8)); setBackgroundColor(Color.rgb(19,24,32))
   }
-  val quality=Button(this).apply { text="Качество"; isAllCaps=false; setOnClickListener{showTrackSelection(C.TRACK_TYPE_VIDEO,"Качество")} }
-  val audio=Button(this).apply { text="Озвучка"; isAllCaps=false; setOnClickListener{showTrackSelection(C.TRACK_TYPE_AUDIO,"Аудиодорожка")} }
+  val quality=Button(this).apply { text="Качество"; isAllCaps=false; isEnabled=false; setOnClickListener{showTrackSelection(C.TRACK_TYPE_VIDEO,"Качество")} }
+  val audio=Button(this).apply { text="Озвучка"; isAllCaps=false; isEnabled=false; setOnClickListener{showTrackSelection(C.TRACK_TYPE_AUDIO,"Аудиодорожка")} }
   controls.addView(quality,LinearLayout.LayoutParams(0,dp(46),1f).apply{setMargins(dp(4),0,dp(4),0)})
   controls.addView(audio,LinearLayout.LayoutParams(0,dp(46),1f).apply{setMargins(dp(4),0,dp(4),0)})
   root.addView(controls,LinearLayout.LayoutParams(-1,dp(58)))
@@ -61,6 +61,10 @@ class PlayerActivity : Activity() {
    player=ExoPlayer.Builder(this).setMediaSourceFactory(sourceFactory).build().also { p ->
     view.player=p
     p.addListener(object:androidx.media3.common.Player.Listener {
+     override fun onTracksChanged(tracks:androidx.media3.common.Tracks) {
+      quality.isEnabled=tracks.groups.any { it.type==C.TRACK_TYPE_VIDEO && it.isSupported }
+      audio.isEnabled=tracks.groups.any { it.type==C.TRACK_TYPE_AUDIO && it.isSupported }
+     }
      override fun onPlayerError(error:androidx.media3.common.PlaybackException) {
       Toast.makeText(this@PlayerActivity,error.message ?: "Ошибка воспроизведения",Toast.LENGTH_LONG).show()
      }
