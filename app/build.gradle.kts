@@ -1,6 +1,6 @@
 plugins { id("com.android.application"); id("org.jetbrains.kotlin.android") }
 android { namespace = "com.vrbrowser.app"; compileSdk = 35
- defaultConfig { applicationId = "com.vrbrowser.app"; minSdk = 26; targetSdk = 35; versionCode = 1007; versionName = "1.0.7" }
+ defaultConfig { applicationId = "com.vrbrowser.app"; minSdk = 26; targetSdk = 35; versionCode = 1008; versionName = "1.0.8" }
  signingConfigs {
   create("persistent") {
    storeFile = file(System.getenv("VR_KEYSTORE_PATH") ?: "vrbrowser-signing.jks")
