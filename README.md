@@ -21,7 +21,7 @@ Android browser for Huawei / Android devices. Kotlin, WebView and Media3.
 
 ## Build and release
 
-The repository's app source tree is now the build source of truth. GitHub Actions builds the signed Release APK from these sources, verifies package name, version code, version name and APK signature, and uploads both the APK and a source archive.
+The complete Android resource tree (themes, drawables and launcher assets) is retained from the existing source bundle. GitHub Actions overlays the tracked Kotlin sources, manifest and Gradle configuration on that complete tree, then builds and signs the 1.0.6 APK. The workflow uploads both the APK and the merged complete source archive.
 
 Required GitHub Actions secrets:
 - VR_KEYSTORE_BASE64 (or legacy VR_KEYSTORE_B64)

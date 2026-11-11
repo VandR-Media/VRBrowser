@@ -6,6 +6,7 @@ on:
       - main
       - fix/media-player-adblock-mp4-1.0.6
     paths:
+      - 'VRBrowser-1.0.5.zip'
       - 'app/**'
       - 'build.gradle.kts'
       - 'settings.gradle.kts'
@@ -20,6 +21,30 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+      - name: Validate full source archive and overlay tracked sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARCHIVE="VRBrowser-1.0.5.zip"
+          test -s "$ARCHIVE" || { echo "::error::Missing complete Android source archive"; exit 1; }
+          unzip -tq "$ARCHIVE"
+          mkdir -p "$RUNNER_TEMP/vrbrowser-source"
+          unzip -q "$ARCHIVE" -d "$RUNNER_TEMP/vrbrowser-source"
+          PROJECT_DIR="$RUNNER_TEMP/vrbrowser-source"
+          test -s "$PROJECT_DIR/app/build.gradle.kts"
+          test -d "$PROJECT_DIR/app/src/main/res"
+          grep -Rqs 'name="VRTheme"' "$PROJECT_DIR/app/src/main/res" || { echo "::error::The base archive is missing VRTheme resources"; exit 1; }
+          rm -rf "$PROJECT_DIR/app/src/main/java"
+          mkdir -p "$PROJECT_DIR/app/src/main"
+          cp -a app/src/main/java "$PROJECT_DIR/app/src/main/java"
+          cp -a app/src/main/AndroidManifest.xml "$PROJECT_DIR/app/src/main/AndroidManifest.xml"
+          cp -a app/build.gradle.kts "$PROJECT_DIR/app/build.gradle.kts"
+          cp -a build.gradle.kts "$PROJECT_DIR/build.gradle.kts"
+          cp -a settings.gradle.kts "$PROJECT_DIR/settings.gradle.kts"
+          cp -a gradle.properties "$PROJECT_DIR/gradle.properties"
+          cp -a README.md "$PROJECT_DIR/README.md"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Complete resources retained; tracked Kotlin and Gradle sources overlaid."
       - name: Java 17
         uses: actions/setup-java@v4
         with:
@@ -58,7 +83,9 @@ jobs:
           printf '%s' "$KEY" | base64 --decode > "$RUNNER_TEMP/vrbrowser-signing.jks"
           chmod 600 "$RUNNER_TEMP/vrbrowser-signing.jks"
           test -s "$RUNNER_TEMP/vrbrowser-signing.jks"
-      - name: Build signed Release APK from repository sources
+      - name: Build signed Release APK
+        shell: bash
+        working-directory: ${{ runner.temp }}/vrbrowser-source
         env:
           VR_KEYSTORE_PATH: ${{ runner.temp }}/vrbrowser-signing.jks
           VR_KEYSTORE_PASSWORD: ${{ secrets.VR_KEYSTORE_PASSWORD }}
@@ -69,7 +96,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          APK="app/build/outputs/apk/release/app-release.apk"
+          APK="$PROJECT_DIR/app/build/outputs/apk/release/app-release.apk"
           test -s "$APK"
           AAPT="$ANDROID_HOME/build-tools/35.0.0/aapt"
           SIGNER="$ANDROID_HOME/build-tools/35.0.0/apksigner"
@@ -79,19 +106,22 @@ jobs:
           [[ "$META" == *"versionCode='1006'"* ]]
           [[ "$META" == *"versionName='1.0.6'"* ]]
           "$SIGNER" verify --verbose --print-certs "$APK"
-          sha256sum "$APK"
+          mkdir -p "$RUNNER_TEMP/vr-output"
+          cp "$APK" "$RUNNER_TEMP/vr-output/VRBrowser-1.0.6-signed-release.apk"
+          sha256sum "$RUNNER_TEMP/vr-output/VRBrowser-1.0.6-signed-release.apk"
       - name: Upload signed Release APK
         uses: actions/upload-artifact@v4
         with:
           name: VRBrowser-1.0.6-SIGNED-RELEASE
-          path: app/build/outputs/apk/release/app-release.apk
+          path: ${{ runner.temp }}/vr-output/VRBrowser-1.0.6-signed-release.apk
           if-no-files-found: error
           retention-days: 30
-      - name: Package source archive
+      - name: Package complete source archive
+        shell: bash
         run: |
-          mkdir -p "$RUNNER_TEMP/vrbrowser-source"
-          cp -a app build.gradle.kts settings.gradle.kts gradle.properties README.md .github "$RUNNER_TEMP/vrbrowser-source/"
-          (cd "$RUNNER_TEMP/vrbrowser-source" && zip -qr "$RUNNER_TEMP/VRBrowser-1.0.6-SOURCE.zip" .)
+          set -euo pipefail
+          cd "$PROJECT_DIR"
+          zip -qr "$RUNNER_TEMP/VRBrowser-1.0.6-SOURCE.zip" . -x '*/build/*' '.gradle/*' '*/.gradle/*'
       - name: Upload source archive
         uses: actions/upload-artifact@v4
         with:
