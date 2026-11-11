@@ -1,10 +1,11 @@
-name: V&R Browser 1.0.10 — native player, MP4 and ad filtering
+name: V&R Browser 1.0.11 — native player, MP4 and ad filtering
 on:
   workflow_dispatch:
   push:
     branches:
       - main
-      - fix/1.0.10-startup-audio-hls-fullscreen
+      - security/shield-hardening-1.0.11
+      - fix/1.0.11-startup-audio-hls-fullscreen
     paths:
       - 'app/**'
       - 'build.gradle.kts'
@@ -78,6 +79,17 @@ jobs:
           printf '%s' "$KEY" | base64 --decode > "$RUNNER_TEMP/vrbrowser-signing.jks"
           chmod 600 "$RUNNER_TEMP/vrbrowser-signing.jks"
           test -s "$RUNNER_TEMP/vrbrowser-signing.jks"
+      - name: Static security gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -Fq 'android:usesCleartextTraffic="false"' app/src/main/AndroidManifest.xml
+          grep -Fq 'android:allowBackup="false"' app/src/main/AndroidManifest.xml
+          grep -Fq 'safeBrowsingEnabled=true' app/src/main/java/com/vrbrowser/app/MainActivity.kt
+          grep -Fq 'handler?.cancel()' app/src/main/java/com/vrbrowser/app/MainActivity.kt
+          grep -Fq 'allowFileAccess=false' app/src/main/java/com/vrbrowser/app/MainActivity.kt
+          grep -Fq 'setAcceptThirdPartyCookies' app/src/main/java/com/vrbrowser/app/MainActivity.kt
+          echo "Security source gates passed"
       - name: Build signed Release APK
         shell: bash
         working-directory: ${{ github.workspace }}
@@ -99,28 +111,28 @@ jobs:
           echo "$META"
           [[ "$META" == *"name='com.vrbrowser.app'"* ]]
           [[ "$META" == *"versionCode='1010'"* ]]
-          [[ "$META" == *"versionName='1.0.10'"* ]]
+          [[ "$META" == *"versionName='1.0.11'"* ]]
           "$SIGNER" verify --verbose --print-certs "$APK"
           mkdir -p "$RUNNER_TEMP/vr-output"
-          cp "$APK" "$RUNNER_TEMP/vr-output/VRBrowser-1.0.10-signed-release.apk"
-          sha256sum "$RUNNER_TEMP/vr-output/VRBrowser-1.0.10-signed-release.apk"
+          cp "$APK" "$RUNNER_TEMP/vr-output/VRBrowser-1.0.11-signed-release.apk"
+          sha256sum "$RUNNER_TEMP/vr-output/VRBrowser-1.0.11-signed-release.apk"
       - name: Upload signed Release APK
         uses: actions/upload-artifact@v4
         with:
-          name: VRBrowser-1.0.10-SIGNED-RELEASE
-          path: ${{ runner.temp }}/vr-output/VRBrowser-1.0.10-signed-release.apk
+          name: VRBrowser-1.0.11-SIGNED-RELEASE
+          path: ${{ runner.temp }}/vr-output/VRBrowser-1.0.11-signed-release.apk
           if-no-files-found: error
           retention-days: 30
       - name: Package complete tracked source archive
         shell: bash
         run: |
           set -euo pipefail
-          git archive --format=zip --output="$RUNNER_TEMP/VRBrowser-1.0.10-SOURCE.zip" HEAD
-          unzip -tq "$RUNNER_TEMP/VRBrowser-1.0.10-SOURCE.zip"
+          git archive --format=zip --output="$RUNNER_TEMP/VRBrowser-1.0.11-SOURCE.zip" HEAD
+          unzip -tq "$RUNNER_TEMP/VRBrowser-1.0.11-SOURCE.zip"
       - name: Upload source archive
         uses: actions/upload-artifact@v4
         with:
-          name: VRBrowser-1.0.10-SOURCE
-          path: ${{ runner.temp }}/VRBrowser-1.0.10-SOURCE.zip
+          name: VRBrowser-1.0.11-SOURCE
+          path: ${{ runner.temp }}/VRBrowser-1.0.11-SOURCE.zip
           if-no-files-found: error
           retention-days: 30
