@@ -16,7 +16,9 @@ import java.net.URLEncoder
 import io.github.edsuns.adfilter.AdFilter
 import io.github.edsuns.adfilter.util.None
 import androidx.lifecycle.Observer
+import androidx.media3.common.util.UnstableApi
 
+@OptIn(UnstableApi::class)
 class MainActivity : Activity() {
  private val neonBlue = Color.rgb(39, 190, 245)
  private val neonPink = Color.rgb(238, 77, 171)
@@ -29,6 +31,8 @@ class MainActivity : Activity() {
  private lateinit var pages: FrameLayout
  private lateinit var status: TextView
  private lateinit var playerButton: TextView
+ private var inlinePlayer:InlinePlayerController?=null
+ private var autoInlinePending=false
  private val tabs = mutableListOf<WebView>()
  private var current = 0
  private val media = linkedSetOf<String>()
@@ -90,7 +94,7 @@ class MainActivity : Activity() {
   address.setOnEditorActionListener { _,_,_ -> navigate(address.text.toString()); true }
   pages=FrameLayout(this); root.addView(pages,LinearLayout.LayoutParams(-1,0,1f))
   playerButton=TextView(this).apply {
-   text="▶  Открыть в V&R Player"; textSize=13f; gravity=Gravity.CENTER
+   text="▶  V&R Player на странице"; textSize=13f; gravity=Gravity.CENTER
    setTextColor(Color.WHITE); background=rounded(surface,20,neonBlue)
    elevation=dp(6).toFloat(); visibility=View.GONE
    setOnClickListener { openDetectedPlayer() }
@@ -136,7 +140,11 @@ class MainActivity : Activity() {
     if(url!=null && Regex("\\.(mp4|mp3|m4a|aac|webm|m3u8|mpd|m4v|ogg)(\\?|#|$)",RegexOption.IGNORE_CASE).containsMatchIn(url)) {
      detected.add(url)
      if(url.contains(".m3u8",true) && view!=null) runOnUiThread {
-      if(!isFinishing && view==active()) { playerButton.visibility=View.VISIBLE; playerButton.bringToFront() }
+      if(!isFinishing && !isDestroyed && tabs.isNotEmpty() && view==active()) {
+       playerButton.visibility=View.VISIBLE
+       playerButton.bringToFront()
+       scheduleInlineReplacement(view)
+      }
      }
     }
     if(view!=null && request!=null && shield.mode()!=0) {
@@ -150,7 +158,10 @@ class MainActivity : Activity() {
     return super.shouldInterceptRequest(view,request)
    }
    override fun onPageStarted(v:WebView?,url:String?,favicon:android.graphics.Bitmap?) {
-    if(v==active()) { media.clear(); detected.clear(); playerButton.visibility=View.GONE }
+    if(tabs.isNotEmpty() && v==active()) {
+     inlinePlayer?.release(false);inlinePlayer=null;autoInlinePending=false
+     media.clear(); detected.clear(); playerButton.visibility=View.GONE
+    }
     if(shield.mode()!=0) try { adFilter.performScript(v,url) } catch (_:Throwable) { }
     super.onPageStarted(v,url,favicon)
    }
@@ -178,17 +189,38 @@ class MainActivity : Activity() {
     return true
    }
   }
+  web.setOnScrollChangeListener { _,_,_,_,_ ->
+   if(inlinePlayer?.web==web)inlinePlayer?.refreshPosition()
+  }
   web.setDownloadListener { url,ua,disposition,mime,_ -> if(url.startsWith("https://")||url.startsWith("http://")) confirmDownload(url,ua,mime,disposition) }
   web.setOnLongClickListener { val hit=web.hitTestResult; val u=hit.extra; if(u!=null && u.startsWith("http")) { media.add(u); status.text="Ссылка добавлена в Медиа"; true } else false }
   tabs.add(web); pages.addView(web); playerButton.bringToFront(); switchTab(tabs.lastIndex); web.loadUrl(url)
  }
- private fun switchTab(index:Int) { current=index; tabs.forEachIndexed { i,v -> v.visibility=if(i==index) View.VISIBLE else View.GONE }; address.setText(active().url ?: ""); media.clear(); detected.clear(); playerButton.visibility=View.GONE }
+ private fun switchTab(index:Int) {
+  inlinePlayer?.release();inlinePlayer=null;autoInlinePending=false
+  current=index
+  tabs.forEachIndexed { i,v -> v.visibility=if(i==index) View.VISIBLE else View.GONE }
+  address.setText(active().url ?: "")
+  media.clear(); detected.clear(); playerButton.visibility=View.GONE
+ }
  private fun navigate(raw:String) { val t=raw.trim(); if(t.isEmpty())return; val u=if(t.startsWith("https://")||t.startsWith("http://")) t else if(t.contains('.')&&!t.contains(' ')) "https://$t" else "https://www.google.com/search?q=${URLEncoder.encode(t,"UTF-8")}"; active().loadUrl(u) }
- private fun openDetectedPlayer() {
+ private fun scheduleInlineReplacement(web:WebView) {
+  if(inlinePlayer!=null || autoInlinePending || !prefs.getBoolean("auto_inline_player",true))return
+  autoInlinePending=true
+  Handler(Looper.getMainLooper()).postDelayed({
+   autoInlinePending=false
+   if(!isFinishing && !isDestroyed && tabs.isNotEmpty() && web==active() && inlinePlayer==null)openDetectedPlayer(false)
+  },1700L)
+ }
+
+ private fun openDetectedPlayer(manual:Boolean=true) {
   val urls=synchronized(detected){detected.toList()}
   val hls=urls.filter{it.contains(".m3u8",true)}
   val direct=urls.lastOrNull{Regex("\\.(mp4|m4v|webm)(\\?|#|$)",RegexOption.IGNORE_CASE).containsMatchIn(it)}
-  if(hls.isEmpty() && direct==null) { Toast.makeText(this,"Поток ещё не найден. Запусти видео на странице и попробуй снова.",Toast.LENGTH_LONG).show(); return }
+  if(hls.isEmpty() && direct==null) {
+   if(manual)Toast.makeText(this,"Поток ещё не найден. Запусти видео на странице и попробуй снова.",Toast.LENGTH_LONG).show()
+   return
+  }
   val web=active()
   val referer=web.url.orEmpty()
   val userAgent=web.settings.userAgentString
@@ -199,14 +231,35 @@ class MainActivity : Activity() {
      body.contains("#EXT-X-STREAM-INF") || body.contains("#EXT-X-MEDIA:TYPE=AUDIO")
     } catch (_:Exception) { false }
    }
-   val source=master ?: hls.lastOrNull() ?: direct
+   val source=master ?: if(manual)(hls.lastOrNull() ?: direct) else null
    runOnUiThread {
-    if(source.isNullOrBlank() || isFinishing) return@runOnUiThread
-    startActivity(Intent(this,PlayerActivity::class.java)
+    if(source.isNullOrBlank() || isFinishing || isDestroyed || tabs.isEmpty() || web!=active() || inlinePlayer!=null)return@runOnUiThread
+    val fullscreen=Intent(this,PlayerActivity::class.java)
      .putExtra("url",source)
      .putExtra("referer",referer)
      .putExtra("user_agent",userAgent)
-     .putExtra("title",active().title ?: "Видео онлайн"))
+     .putExtra("title",web.title ?: "Видео онлайн")
+    val controller=InlinePlayerController(this,pages,web,source,referer,userAgent,
+     fullscreen={
+      inlinePlayer?.release(false)
+      inlinePlayer=null
+      playerButton.visibility=View.VISIBLE
+      startActivity(fullscreen)
+     },
+     closed={
+      inlinePlayer=null
+      playerButton.visibility=View.VISIBLE
+     })
+    inlinePlayer=controller
+    controller.attach { success ->
+     if(success) {
+      playerButton.visibility=View.GONE
+      status.text="V&R Player встроен в страницу"
+     } else {
+      if(inlinePlayer===controller)inlinePlayer=null
+      if(manual)startActivity(fullscreen)
+     }
+    }
    }
   }.start()
  }
@@ -546,7 +599,12 @@ class MainActivity : Activity() {
  private fun dialogBuilder(): AlertDialog.Builder = AlertDialog.Builder(this, R.style.VRDialog)
  private fun alert(title:String,msg:String) { dialogBuilder().setTitle(title).setMessage(msg).setPositiveButton("OK",null).show() }
  override fun onBackPressed() { if(active().canGoBack())active().goBack() else super.onBackPressed() }
+ override fun onPause() {
+  inlinePlayer?.pause()
+  super.onPause()
+ }
  override fun onDestroy() {
+  inlinePlayer?.release(false);inlinePlayer=null
   try{adFilter.viewModel.onDirty.removeObserver(filterDirtyObserver)}catch(_:Throwable){}
   tabs.forEach { try{it.destroy()}catch(_:Throwable){} }
   super.onDestroy()
