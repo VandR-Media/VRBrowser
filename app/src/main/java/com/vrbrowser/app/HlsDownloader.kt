@@ -152,7 +152,8 @@ object HlsDownloader {
    inputs.forEach{path->
     extractors.add(MediaExtractor().apply{setDataSource(path.absolutePath)})
    }
-   muxer=MediaMuxer(output.absolutePath,MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+   val writer=MediaMuxer(output.absolutePath,MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+   muxer=writer
    val maps=extractors.map{mutableMapOf<Int,Int>()}
    var videoCount=0
    var audioCount=0
@@ -174,14 +175,14 @@ object HlsDownloader {
      if(format.containsKey(MediaFormat.KEY_MAX_INPUT_SIZE)){
       maxInputSize=maxOf(maxInputSize,format.getInteger(MediaFormat.KEY_MAX_INPUT_SIZE).coerceAtLeast(0))
      }
-     maps[sourceIndex][track]=muxer.addTrack(format)
+     maps[sourceIndex][track]=writer.addTrack(format)
      extractor.selectTrack(track)
     }
    }
    check(videoCount>0){"Не найдена видеодорожка HLS"}
    check(audioCount>0){"Не найдена аудиодорожка. Сохранение немого MP4 запрещено: нужен аудиоплейлист HLS."}
    maxInputSize=maxInputSize.coerceIn(1024*1024,16*1024*1024)
-   muxer.start()
+   writer.start()
    started=true
    val buffer=ByteBuffer.allocateDirect(maxInputSize)
    val info=MediaCodec.BufferInfo()
@@ -203,14 +204,14 @@ object HlsDownloader {
     info.size=bytes
     info.presentationTimeUs=(ex.sampleTime-firstUs).coerceAtLeast(0L)
     info.flags=ex.sampleFlags
-    muxer.writeSampleData(track,buffer,info)
+    writer.writeSampleData(track,buffer,info)
     count++
     if(!ex.advance()) {
      // The next loop will continue with the remaining extractor, if any.
     }
    }
    check(count>0){"Не удалось прочитать медиасэмплы"}
-   muxer.stop()
+   writer.stop()
    started=false
    check(output.isFile && output.length()>0L){"MP4-файл пуст"}
    // Reopen the result to catch missing audio/video before user sees 'Готово'.
@@ -332,7 +333,11 @@ object HlsDownloader {
    val fingerprint=MessageDigest.getInstance("SHA-256")
     .digest((initial.source.substringBefore('?')+"\n"+mediaSequence+"\n"+stableSegments).toByteArray(Charsets.UTF_8))
     .joinToString(""){"%02x".format(it.toInt() and 255)}
-   val marker=File(folder,"manifest.sha256");if(marker.exists()&&marker.readText()!=fingerprint)folder.listFiles()?.filter{it.name.endsWith(".ts")||it.name.endsWith(".part")}?.forEach{it.delete()};marker.writeText(fingerprint)
+   val marker=File(folder,"manifest.sha256")
+   if(marker.exists() && marker.readText()!=fingerprint){
+    throw IOException("HLS-плейлист изменился. Уже скачанные сегменты сохранены, но их нельзя безопасно объединить с другим потоком.")
+   }
+   marker.writeText(fingerprint)
    fun segmentFile(i:Int)=File(folder,"%06d.ts".format(i))
    fun completed()=segments.indices.count{segmentFile(it).isFile&&segmentFile(it).length()>0}
    fun totalBytes()=segments.indices.sumOf{segmentFile(it).takeIf{f->f.isFile}?.length()?:0L}
