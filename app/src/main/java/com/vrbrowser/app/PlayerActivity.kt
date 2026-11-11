@@ -33,7 +33,7 @@ class PlayerActivity : Activity() {
  private val blue=Color.rgb(39,190,245)
  private val pink=Color.rgb(238,77,171)
  private val surface=Color.rgb(27,33,49)
- private val background=Color.rgb(13,18,29)
+ private val backgroundColor=Color.rgb(13,18,29)
  private fun dp(value:Int)=(value*resources.displayMetrics.density).toInt()
  private fun rounded(color:Int,radius:Int,stroke:Int?=null)=GradientDrawable().apply {
   setColor(color)
@@ -88,8 +88,8 @@ class PlayerActivity : Activity() {
 
  override fun onCreate(savedInstanceState:Bundle?) {
   super.onCreate(savedInstanceState)
-  window.statusBarColor=background
-  window.navigationBarColor=background
+  window.statusBarColor=backgroundColor
+  window.navigationBarColor=backgroundColor
   window.decorView.keepScreenOn=true
 
   val url=intent.getStringExtra("url") ?: run { finish(); return }
@@ -100,7 +100,7 @@ class PlayerActivity : Activity() {
 
   val root=LinearLayout(this).apply {
    orientation=LinearLayout.VERTICAL
-   setBackgroundColor(background)
+   setBackgroundColor(backgroundColor)
    setPadding(dp(12),dp(8),dp(12),dp(12))
   }
 
