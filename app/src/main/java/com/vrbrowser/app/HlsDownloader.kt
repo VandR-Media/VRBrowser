@@ -36,8 +36,22 @@ object HlsDownloader {
  private fun isDeleted(c:Context,id:String)=state(c,id)=="Удалено"
  private fun isStopped(c:Context,id:String)=isPaused(c,id)||isDeleted(c,id)
  fun onNetworkLost(){connections.values.forEach{try{it.disconnect()}catch(_:Exception){}}}
- fun start(context:Context,id:String,callback:(String)->Unit={}){if(!running.add(id)){restartRequested.add(id);return};paused.remove(id);val app=context.applicationContext;pool.execute{try{perform(app,id,callback)}finally{running.remove(id);if(restartRequested.remove(id)&&TransferStore.state(app,id)=="Подготовка")start(app,id,callback)}}}
- fun pause(context:Context,id:String){paused.add(id);TransferStore.setState(context,id,"Пауза");connections.remove(id)?.disconnect()}
+ fun start(context:Context,id:String,callback:(String)->Unit={}){
+  val app=context.applicationContext
+  paused.remove(id)
+  if(!running.add(id)){restartRequested.add(id);return}
+  pool.execute{
+   try{perform(app,id,callback)}
+   finally{
+    running.remove(id)
+    if(restartRequested.remove(id) && !paused.contains(id) && TransferStore.state(app,id)!="Удалено"){
+     TransferStore.setState(app,id,"Подготовка")
+     start(app,id,callback)
+    }
+   }
+  }
+ }
+ fun pause(context:Context,id:String){restartRequested.remove(id);paused.add(id);TransferStore.setState(context,id,"Пауза");connections.remove(id)?.disconnect()}
  fun delete(context:Context,id:String){paused.add(id);TransferStore.setState(context,id,"Удалено");connections.remove(id)?.disconnect();if(!running.contains(id))cleanup(context,id)}
  private fun cleanup(c:Context,id:String){val item=TransferStore.entries(c).firstOrNull{it.id==id};try{item?.uri?.takeIf{it.isNotBlank()}?.let{c.contentResolver.delete(Uri.parse(it),null,null)}}catch(_:Exception){};File(c.filesDir,"hls_${id}").deleteRecursively();File(c.filesDir,"direct_${id}.part").delete();File(c.filesDir,"direct_${id}.meta").delete();TransferStore.remove(c,id)}
  private fun online(c:Context):Boolean=try{val cm=c.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager;val n=cm.activeNetwork;n!=null&&cm.getNetworkCapabilities(n)?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)==true}catch(_:Exception){false}
@@ -137,6 +151,8 @@ object HlsDownloader {
      maxInputSize=maxOf(maxInputSize,format.getInteger(MediaFormat.KEY_MAX_INPUT_SIZE).coerceAtLeast(0))
     }
     trackMap[i]=muxer.addTrack(format)
+    // MediaExtractor exposes no samples until its tracks are explicitly selected.
+    extractor.selectTrack(i)
    }
    check(videoTracks>0){"В TS-файле не найдена совместимая видеодорожка"}
    check(trackMap.isNotEmpty()){"В TS-файле нет дорожек для MP4"}
@@ -190,7 +206,21 @@ object HlsDownloader {
    check(!body.contains("#EXT-X-MAP")){"fMP4 HLS пока не поддерживается"};check(!body.contains("#EXT-X-BYTERANGE")){"HLS byte-range пока не поддерживается"}
    val segments=body.lines().map{it.trim()}.filter{it.isNotEmpty()&&!it.startsWith("#")};check(segments.isNotEmpty()&&segments.size<=10000){"Некорректный HLS-плейлист"}
    check(segments.none{val path=Uri.parse(it).lastPathSegment.orEmpty().lowercase();path.endsWith(".m4s")||path.endsWith(".mp4")}){"Этот вариант использует fMP4, а не MPEG-TS"}
-   val fingerprint=MessageDigest.getInstance("SHA-256").digest((url.toString()+"\n"+body).toByteArray(Charsets.UTF_8)).joinToString(""){"%02x".format(it.toInt() and 255)}
+   // Stable across short-lived CDN auth-token refreshes, but changes when segment
+   // paths, ordering or the media sequence change. Never discard completed parts
+   // merely because a signed query string was renewed.
+   val stableSegments=segments.joinToString("\n"){segment->
+    val resolved=Uri.parse(URL(url,segment).toString())
+    val query=resolved.query.orEmpty().split('&').filter { param ->
+     val key=param.substringBefore('=').lowercase(java.util.Locale.ROOT)
+     key in setOf("id","index","segment","seg","part","chunk","start","end","range","v")
+    }.joinToString("&")
+    resolved.path.orEmpty() + if(query.isNotBlank()) "?$query" else ""
+   }
+   val mediaSequence=Regex("""(?m)^#EXT-X-MEDIA-SEQUENCE:(\\d+)""").find(body)?.groupValues?.get(1).orEmpty()
+   val fingerprint=MessageDigest.getInstance("SHA-256")
+    .digest((initial.source.substringBefore('?')+"\n"+mediaSequence+"\n"+stableSegments).toByteArray(Charsets.UTF_8))
+    .joinToString(""){"%02x".format(it.toInt() and 255)}
    val marker=File(folder,"manifest.sha256");if(marker.exists()&&marker.readText()!=fingerprint)folder.listFiles()?.filter{it.name.endsWith(".ts")||it.name.endsWith(".part")}?.forEach{it.delete()};marker.writeText(fingerprint)
    fun segmentFile(i:Int)=File(folder,"%06d.ts".format(i))
    fun completed()=segments.indices.count{segmentFile(it).isFile&&segmentFile(it).length()>0}
