@@ -13,6 +13,7 @@ import android.net.Uri
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URLEncoder
+import io.github.edsuns.adfilter.AdFilter
 
 class MainActivity : Activity() {
  private val neonBlue = Color.rgb(39, 190, 245)
@@ -25,13 +26,15 @@ class MainActivity : Activity() {
  private lateinit var address: EditText
  private lateinit var pages: FrameLayout
  private lateinit var status: TextView
+ private lateinit var playerButton: TextView
  private val tabs = mutableListOf<WebView>()
  private var current = 0
  private val media = linkedSetOf<String>()
- private val detected = java.util.Collections.synchronizedSet(mutableSetOf<String>())
+ private val detected = java.util.Collections.synchronizedSet(linkedSetOf<String>())
  private var pendingDownload: Triple<String,String,String>? = null
  private val knownQualities=mutableMapOf<String,String>()
  private val shield by lazy { Shield(this) }
+ private val adFilter by lazy { AdFilter.get(this) }
  private val prefs by lazy { getSharedPreferences("browser", MODE_PRIVATE) }
  private val bookmarks get() = readList("bookmarks")
  private val history get() = readList("history")
@@ -68,6 +71,15 @@ class MainActivity : Activity() {
   addressShell.addView(go,LinearLayout.LayoutParams(dp(42),dp(38)))
   address.setOnEditorActionListener { _,_,_ -> navigate(address.text.toString()); true }
   pages=FrameLayout(this); root.addView(pages,LinearLayout.LayoutParams(-1,0,1f))
+  playerButton=TextView(this).apply {
+   text="▶  Открыть в V&R Player"; textSize=13f; gravity=Gravity.CENTER
+   setTextColor(Color.WHITE); background=rounded(surface,20,neonBlue)
+   elevation=dp(6).toFloat(); visibility=View.GONE
+   setOnClickListener { openDetectedPlayer() }
+  }
+  pages.addView(playerButton,FrameLayout.LayoutParams(dp(184),dp(46),Gravity.BOTTOM or Gravity.END).apply {
+   setMargins(0,0,dp(14),dp(14))
+  })
   status=TextView(this).apply { setTextColor(Color.rgb(156,171,192)); textSize=10f; text="Готов"; setPadding(dp(12),dp(2),0,dp(3)) }; root.addView(status)
   val bottom=row().apply { setPadding(dp(5),dp(5),dp(5),dp(8)); gravity=Gravity.CENTER_VERTICAL }
   root.addView(bottom)
@@ -96,27 +108,72 @@ class MainActivity : Activity() {
  private fun active()=tabs[current]
  private fun addTab(url:String) {
   val web=WebView(this); web.settings.apply { javaScriptEnabled=true; domStorageEnabled=true; mediaPlaybackRequiresUserGesture=true; builtInZoomControls=true; displayZoomControls=false; allowFileAccess=false; allowContentAccess=false; mixedContentMode=WebSettings.MIXED_CONTENT_NEVER_ALLOW }
+  try { adFilter.setupWebView(web) } catch (_:Throwable) { }
   web.webChromeClient=object:WebChromeClient() {
    override fun onShowCustomView(view:View,callback:CustomViewCallback) { val dialog=Dialog(this@MainActivity,android.R.style.Theme_Black_NoTitleBar_Fullscreen); dialog.setContentView(view); dialog.setOnDismissListener { callback.onCustomViewHidden() }; dialog.show(); view.setOnLongClickListener { dialog.dismiss(); true } }
   }
   web.webViewClient=object:WebViewClient() {
    override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
-    val u=request?.url?.toString()
-    if(u!=null && Regex("\\.(mp4|mp3|m4a|aac|webm|m3u8|mpd|m4v|ogg)(\\?|$)",RegexOption.IGNORE_CASE).containsMatchIn(u)) detected.add(u)
-    if (request != null && shield.shouldBlock(request.url, request.isForMainFrame)) return WebResourceResponse("text/plain", "UTF-8", java.io.ByteArrayInputStream(ByteArray(0)))
+    val url=request?.url?.toString()
+    if(url!=null && Regex("\\.(mp4|mp3|m4a|aac|webm|m3u8|mpd|m4v|ogg)(\\?|#|$)",RegexOption.IGNORE_CASE).containsMatchIn(url)) {
+     detected.add(url)
+     if(url.contains(".m3u8",true) && view!=null) runOnUiThread {
+      if(!isFinishing && view==active()) { playerButton.visibility=View.VISIBLE; playerButton.bringToFront() }
+     }
+    }
+    if(view!=null && request!=null && shield.mode()!=0) {
+     try {
+      val result=adFilter.shouldIntercept(view,request)
+      if(result.shouldBlock) return result.resourceResponse ?: WebResourceResponse("text/plain","UTF-8",java.io.ByteArrayInputStream(ByteArray(0)))
+     } catch (_:Throwable) { }
+     if(shield.shouldBlock(request.url,request.isForMainFrame))
+      return WebResourceResponse("text/plain","UTF-8",java.io.ByteArrayInputStream(ByteArray(0)))
+    }
     return super.shouldInterceptRequest(view,request)
    }
+   override fun onPageStarted(v:WebView?,url:String?,favicon:android.graphics.Bitmap?) {
+    if(shield.mode()!=0) try { adFilter.performScript(v,url) } catch (_:Throwable) { }
+    super.onPageStarted(v,url,favicon)
+   }
    override fun shouldOverrideUrlLoading(v:WebView?,r:WebResourceRequest?):Boolean { val u=r?.url ?:return false; return if(u.scheme=="http"||u.scheme=="https") false else { try { startActivity(Intent(Intent.ACTION_VIEW,u)) } catch (_:Exception){}; true } }
-   override fun onPageFinished(v:WebView?,url:String?) { if(v==active()) { address.setText(url); status.text="Готов · найдено медиа: ${media.size}" }; if(url?.startsWith("https://")==true) { val h=history; h.remove(url); h.add(url); writeList("history",h) }; scanPage(v) }
+   override fun onPageFinished(v:WebView?,url:String?) { if(v==active()) { address.setText(url); status.text="Готов · найдено медиа: ${media.size}"; if(synchronized(detected){detected.any{it.contains(".m3u8",true)}}){playerButton.visibility=View.VISIBLE;playerButton.bringToFront()} }; if(url?.startsWith("https://")==true) { val h=history; h.remove(url); h.add(url); writeList("history",h) }; scanPage(v) }
   }
   web.setDownloadListener { url,ua,disposition,mime,_ -> if(url.startsWith("https://")||url.startsWith("http://")) confirmDownload(url,ua,mime,disposition) }
   web.setOnLongClickListener { val hit=web.hitTestResult; val u=hit.extra; if(u!=null && u.startsWith("http")) { media.add(u); status.text="Ссылка добавлена в Медиа"; true } else false }
-  tabs.add(web); pages.addView(web); switchTab(tabs.lastIndex); web.loadUrl(url)
+  tabs.add(web); pages.addView(web); playerButton.bringToFront(); switchTab(tabs.lastIndex); web.loadUrl(url)
  }
- private fun switchTab(index:Int) { current=index; tabs.forEachIndexed { i,v -> v.visibility=if(i==index) View.VISIBLE else View.GONE }; address.setText(active().url ?: ""); media.clear(); detected.clear() }
+ private fun switchTab(index:Int) { current=index; tabs.forEachIndexed { i,v -> v.visibility=if(i==index) View.VISIBLE else View.GONE }; address.setText(active().url ?: ""); media.clear(); detected.clear(); playerButton.visibility=View.GONE }
  private fun navigate(raw:String) { val t=raw.trim(); if(t.isEmpty())return; val u=if(t.startsWith("https://")||t.startsWith("http://")) t else if(t.contains('.')&&!t.contains(' ')) "https://$t" else "https://www.google.com/search?q=${URLEncoder.encode(t,"UTF-8")}"; active().loadUrl(u) }
- private fun scanPage(web:WebView?) { if(web==null)return; web.evaluateJavascript("(function(){return JSON.stringify(Array.from(document.querySelectorAll('video,audio,source,a')).map(e=>e.currentSrc||e.src||e.href).filter(x=>x&&/^(https?:)/.test(x)&&(/\\.(mp4|mp3|m4a|aac|webm|m3u8|mpd)(\\?|#|$)/i.test(x)||e===document.querySelector('video'))).slice(0,150))})()") { raw ->
-  try { val decoded=JSONArray("[$raw]").getString(0); val arr=JSONArray(decoded); for(i in 0 until arr.length())media.add(arr.getString(i)); status.text="Готов · найдено медиа: ${media.size}" } catch (_:Exception) {} }
+ private fun openDetectedPlayer() {
+  val urls=synchronized(detected){detected.toList()}
+  val source=urls.lastOrNull{it.contains(".m3u8",true)} ?: urls.lastOrNull{Regex("\\.(mp4|m4v|webm)(\\?|#|$)",RegexOption.IGNORE_CASE).containsMatchIn(it)}
+  if(source.isNullOrBlank()) { Toast.makeText(this,"Поток ещё не найден. Запусти видео на странице и попробуй снова.",Toast.LENGTH_LONG).show(); return }
+  val web=active()
+  startActivity(Intent(this,PlayerActivity::class.java)
+   .putExtra("url",source)
+   .putExtra("referer",web.url.orEmpty())
+   .putExtra("user_agent",web.settings.userAgentString))
+ }
+ private fun scanPage(web:WebView?) {
+  if(web==null)return
+  val script = """
+   (function() {
+    const items = Array.from(document.querySelectorAll('video,audio,source,a'))
+      .map(e => ({url:e.currentSrc || e.src || e.href, media:e.tagName === 'VIDEO' || e.tagName === 'AUDIO'}))
+      .filter(item => item.url && /^https?:/i.test(item.url) &&
+        (/\.(mp4|mp3|m4a|aac|webm|m3u8|mpd|m4v|ogg)(\?|#|$)/i.test(item.url) || item.media))
+      .map(item => item.url);
+    return JSON.stringify(Array.from(new Set(items)).slice(0,150));
+   })()
+  """.trimIndent()
+  web.evaluateJavascript(script) { raw ->
+   try {
+    val decoded=JSONArray("[$raw]").getString(0)
+    val arr=JSONArray(decoded)
+    for(i in 0 until arr.length()) media.add(arr.getString(i))
+    status.text="Готов · найдено медиа: ${media.size}"
+   } catch (_:Exception) { }
+  }
  }
  private fun mediaType(url: String): String = when {
   Regex("\\.m3u8(\\?|$)", RegexOption.IGNORE_CASE).containsMatchIn(url) -> "HLS · потоковое видео"
@@ -173,7 +230,8 @@ class MainActivity : Activity() {
     }
    }
    if(variants.isNotEmpty()) {
-    val best=variants.maxByOrNull{it.first}!!
+    if(variants.size!=1) return Pair(null,null)
+   val best=variants.single()
     val child=java.net.URL(java.net.URL(url),best.second).toString()
     val nested=estimateHls(child,referer,depth+1)
     return Pair(nested.first, nested.first?.let{(it/1000.0*best.first/8.0).toLong()} ?: nested.second)
@@ -234,29 +292,54 @@ class MainActivity : Activity() {
   return MediaDetails(quality,duration,frame,estimatedBytes)
  }
  private data class StreamEntry(val url: String, val quality: String? = null, val bitrate: Long? = null)
- private fun expandStreams(url: String, referer: String): List<StreamEntry> {
-  if (!url.contains(".m3u8", true)) return listOf(StreamEntry(url))
+ private data class HlsVariant(val url:String,val quality:String?,val bitrate:Long?)
+ private fun readHlsPlaylist(url:String,referer:String):String {
+  val conn=(java.net.URL(url).openConnection() as java.net.HttpURLConnection).apply {
+   connectTimeout=5000; readTimeout=7000; instanceFollowRedirects=true
+   setRequestProperty("User-Agent",WebSettings.getDefaultUserAgent(this@MainActivity))
+   setRequestProperty("Accept","*/*")
+   if(referer.startsWith("http"))setRequestProperty("Referer",referer)
+   CookieManager.getInstance().getCookie(url)?.takeIf{it.isNotBlank()}?.let{setRequestProperty("Cookie",it)}
+  }
+  return try { conn.inputStream.bufferedReader().use{it.readText().take(600000)} } finally { conn.disconnect() }
+ }
+ private fun expandStreams(url:String,referer:String,depth:Int=0,inheritedQuality:String?=null,inheritedBitrate:Long?=null,visited:Set<String> = emptySet()):List<StreamEntry> {
+  if(!url.contains(".m3u8",true))return listOf(StreamEntry(url,inheritedQuality,inheritedBitrate))
+  if(depth>4 || url in visited)return listOf(StreamEntry(url,inheritedQuality ?: "Качество неизвестно",inheritedBitrate))
   return try {
-   val conn = (java.net.URL(url).openConnection() as java.net.HttpURLConnection).apply {
-    connectTimeout=3500; readTimeout=3500
-    setRequestProperty("User-Agent", "Mozilla/5.0 (Android) V&R Browser")
-    if (referer.startsWith("http")) setRequestProperty("Referer", referer)
-     CookieManager.getInstance().getCookie(url)?.takeIf{it.isNotBlank()}?.let{setRequestProperty("Cookie",it)}
-   }
-   val content=try { conn.inputStream.bufferedReader().use { it.readText().take(400000) } } finally { conn.disconnect() }
+   val content=readHlsPlaylist(url,referer)
+   if(!content.trimStart().startsWith("#EXTM3U"))return listOf(StreamEntry(url,inheritedQuality ?: "Качество неизвестно",inheritedBitrate))
    val lines=content.lines()
-   val variants=mutableListOf<StreamEntry>()
-   for(i in lines.indices) {
-    val line=lines[i].trim()
-    if (!line.startsWith("#EXT-X-STREAM-INF:")) continue
-    val child=lines.drop(i+1).firstOrNull { it.isNotBlank() && !it.trim().startsWith("#") } ?: continue
-    val height=Regex("RESOLUTION=\\d+x(\\d+)").find(line)?.groupValues?.get(1)
-    val label=height?.let { "${it}p" } ?: Regex("NAME=\"([^\"]+)\"").find(line)?.groupValues?.get(1)
-    val bitrate=Regex("(?:AVERAGE-BANDWIDTH|BANDWIDTH)=(\\d+)").find(line)?.groupValues?.get(1)?.toLongOrNull()
-    variants.add(StreamEntry(java.net.URL(java.net.URL(url),child.trim()).toString(),label,bitrate))
+   val variants=lines.mapIndexedNotNull { index,line ->
+    val tag=line.trim()
+    if(!tag.startsWith("#EXT-X-STREAM-INF:"))null else {
+     val child=lines.drop(index+1).firstOrNull{it.isNotBlank()&&!it.trim().startsWith("#")}
+     if(child==null)null else {
+      val height=Regex("""RESOLUTION=\d+x(\d+)""").find(tag)?.groupValues?.get(1)?.toIntOrNull()
+      val name=Regex("""NAME="([^"]+)"""").find(tag)?.groupValues?.get(1)
+      val namedQuality=name?.let { raw ->
+       val match=Regex("""(?i)(\d{3,4})p?""").find(raw)
+       match?.let{"${it.groupValues[1]}p"} ?: raw.take(40)
+      }
+      val quality=height?.let{"${it}p"} ?: namedQuality
+      val bitrate=Regex("""(?:AVERAGE-BANDWIDTH|BANDWIDTH)=(\d+)""").find(tag)?.groupValues?.get(1)?.toLongOrNull()
+      HlsVariant(java.net.URL(java.net.URL(url),child.trim()).toString(),quality,bitrate)
+     }
+    }
    }
-   if (variants.isNotEmpty()) variants.distinctBy { it.url } else listOf(StreamEntry(url))
-  } catch (_: Exception) { listOf(StreamEntry(url)) }
+   if(variants.isEmpty())return listOf(StreamEntry(url,inheritedQuality ?: "Качество неизвестно",inheritedBitrate))
+   variants.flatMap { variant ->
+    val label=variant.quality ?: inheritedQuality ?: variant.bitrate?.let{"Битрейт %.2f Мбит/с".format(java.util.Locale.getDefault(),it/1000000.0)} ?: "Качество неизвестно"
+    expandStreams(variant.url,referer,depth+1,label,variant.bitrate ?: inheritedBitrate,visited+url).map { leaf ->
+     leaf.copy(
+      quality=if(leaf.quality.isNullOrBlank() || leaf.quality=="Качество неизвестно") label else leaf.quality,
+      bitrate=leaf.bitrate ?: variant.bitrate ?: inheritedBitrate
+     )
+    }
+   }.distinctBy{it.url}
+  } catch (_:Exception) {
+   listOf(StreamEntry(url,inheritedQuality ?: "Качество неизвестно",inheritedBitrate))
+  }
  }
  private fun showMedia() {
   scanPage(active())
@@ -296,7 +379,7 @@ class MainActivity : Activity() {
        setOnClickListener { confirmDownload(url,"","","",entry.quality) }
       }
       item.addView(download,LinearLayout.LayoutParams(dp(42),dp(48)))
-      thumb.setOnClickListener { startActivity(Intent(this,PlayerActivity::class.java).putExtra("url",url)) }
+      thumb.setOnClickListener { startActivity(Intent(this,PlayerActivity::class.java).putExtra("url",url).putExtra("referer",referer).putExtra("user_agent",active().settings.userAgentString)) }
       info.setOnClickListener { showMediaActions(url,"${index+1}. ${entry.quality ?: mediaType(url)}") }
       list.addView(item)
       list.addView(View(this).apply { setBackgroundColor(Color.rgb(53,64,83)) },LinearLayout.LayoutParams(-1,dp(1)))
@@ -324,7 +407,7 @@ class MainActivity : Activity() {
  private fun showMediaActions(url:String, label:String) {
   val choices=arrayOf("Смотреть", "Скачать", "Поделиться ссылкой", "Копировать ссылку", "Технический адрес")
   dialogBuilder().setTitle(label).setItems(choices) { _,choice -> when(choice) {
-   0 -> startActivity(Intent(this, PlayerActivity::class.java).putExtra("url",url))
+   0 -> startActivity(Intent(this, PlayerActivity::class.java).putExtra("url",url).putExtra("referer",active().url.orEmpty()).putExtra("user_agent",active().settings.userAgentString))
    1 -> confirmDownload(url,"","","",knownQualities[url])
    2 -> startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply { type="text/plain"; putExtra(Intent.EXTRA_TEXT,url) },"Поделиться"))
    3 -> (getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager).setPrimaryClip(ClipData.newPlainText("Media URL",url))
@@ -334,7 +417,7 @@ class MainActivity : Activity() {
  private fun confirmDownload(url:String,ua:String,mime:String,disposition:String,quality:String?=null) {
   if(Regex("\\.mpd(\\?|$)",RegexOption.IGNORE_CASE).containsMatchIn(url)) { alert("DASH","Скачивание DASH пока не поддерживается");return }
   val hls=url.contains(".m3u8",true)
-  val ext=if(hls)"ts" else (URLUtil.guessFileName(url,disposition,mime).substringAfterLast('.',"bin").take(8))
+  val ext=if(hls)"mp4" else (URLUtil.guessFileName(url,disposition,mime).substringAfterLast('.',"bin").take(8))
   val title=(active().title ?: "VRBrowser").replace(Regex("[^\\p{L}\\p{N}._ -]"),"_").trim().take(65).ifBlank{"VRBrowser"}
   val res=quality?.takeIf{Regex("[0-9]{3,4}p").matches(it)}?.let{"_${it}"} ?: ""
   val name="${title}${res}.$ext"
@@ -343,7 +426,7 @@ class MainActivity : Activity() {
   // ACTION_CREATE_DOCUMENT lets the user select the location and name without storage permissions.
   try {
    startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
-    addCategory(Intent.CATEGORY_OPENABLE);type=if(hls)"video/mp2t" else (mime.takeIf{it.isNotBlank()}?:"application/octet-stream")
+    addCategory(Intent.CATEGORY_OPENABLE);type=if(hls)"video/mp4" else (mime.takeIf{it.isNotBlank()}?:"application/octet-stream")
     putExtra(Intent.EXTRA_TITLE,name)
    },4901)
   } catch(e:Exception) { alert("Ошибка выбора места",e.message?:"Нет системного файлового менеджера") }
@@ -383,7 +466,10 @@ class MainActivity : Activity() {
   val modes=arrayOf("Выключен", "Сбалансированный", "Строгий")
   val current=shield.mode()
   dialogBuilder().setTitle("V&R Shield · режим").setSingleChoiceItems(modes,current) { dialog,which -> shield.setMode(which); dialog.dismiss(); Toast.makeText(this,"Режим сохранён",Toast.LENGTH_SHORT).show() }
-   .setPositiveButton("Обновить фильтры") { _,_ -> shield.updateNow { result -> runOnUiThread { alert("Фильтры",result) } } }
+   .setPositiveButton("Обновить фильтры") { _,_ ->
+    try { adFilter.viewModel.filters.value?.values?.forEach { adFilter.viewModel.download(it.id) } } catch (_:Throwable) { }
+    shield.updateNow { result -> runOnUiThread { alert("Фильтры",result) } }
+   }
    .setNeutralButton("Исключения") { _,_ -> val input=EditText(this).apply { setText(shield.exclusions()); hint="example.com, другой-сайт.ru" }; dialogBuilder().setTitle("Сайты без блокировки").setView(input).setPositiveButton("Сохранить") { _,_ -> shield.setExclusions(input.text.toString()) }.setNegativeButton("Отмена",null).show() }
    .setNegativeButton("Закрыть",null).show()
  }

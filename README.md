@@ -1,31 +1,27 @@
-# V&R Browser 1.0.5
+# V&R Browser 1.0.6
 
 Android browser for Huawei / Android devices. Kotlin, WebView and Media3.
 
-## 1.0.5 — download reliability
+## 1.0.6 — media pipeline
 
-- HLS pause interrupts the active segment request instead of only changing the label.
-- Resume reuses only fully written segments from the same playlist fingerprint.
-- HLS and direct downloads use the browser's current WebView User-Agent, Referer and Cookie header.
-- Direct-file resume validates the server's Content-Range offset and uses If-Range with ETag / Last-Modified when available.
-- Network loss interrupts stale connections; transient failures wait for connectivity and retry.
-- Interrupted transfers are recovered when the app process starts again. Explicitly paused tasks are not auto-started.
-- The Storage Access Framework write permission is persisted so a selected destination can survive an app restart.
-- Progress remains below 100% until the final output file has been written successfully.
-- A 401/403 is reported as an expired/session-bound link. The library offers to reopen the source page; a fresh stream must be selected there.
-- Media metadata requests now include WebView cookies. File opening uses the MIME type derived from the actual extension.
+- HLS master playlists are expanded recursively into leaf variants before they are offered for download.
+- Unknown quality is never silently mapped to the highest-bitrate variant. Ambiguous nested playlists fail with a clear message.
+- The media scanner's JavaScript scope bug is fixed.
+- HLS downloads are assembled from resumable MPEG-TS segments and then remuxed/transformed to MP4 with Media3 Transformer. The selected destination is always a .mp4 file for supported HLS inputs.
+- A floating V&R Player shortcut appears when an HLS stream is detected on the page.
+- The native Media3 player receives the page Referer, WebView User-Agent and cookies. Its controls include separate quality and audio-track menus when the source exposes those tracks.
+- Ad filtering now uses an ABP-compatible engine with AdGuard Base, EasyPrivacy Lite and AdGuard Tracking Protection subscriptions, alongside the existing host-level blocker.
 
-## HLS support and limitations
+## HLS and media limitations
 
-The downloader assembles finite, unencrypted MPEG-TS HLS playlists. It does not bypass DRM. Live streams, AES-128 encrypted streams, fMP4 (EXT-X-MAP), byte-range playlists, DASH and some non-TS segment formats are not supported and should report a clear error instead of producing a misleading completed file.
+- The resumable HLS downloader supports finite, unencrypted MPEG-TS playlists. Live HLS, DRM, AES-128, fMP4/CMAF HLS, byte-range playlists and DASH downloads are not supported by this downloader.
+- MP4 export depends on the codecs supported by Media3 Transformer and the device's Android media codecs. If conversion fails, the app reports an error rather than pretending a TS file is an MP4.
+- Alternate audio renditions are available in the native player when the HLS master playlist exposes them. Downloading a separately hosted alternate audio rendition is not yet implemented.
+- A browser filter cannot reliably remove ads inserted directly into the video stream by the streaming provider. Blocking those segments can also break playback.
 
-Displayed size in the media finder is an estimate. The download library reports the bytes actually written to the output file.
+## Build and release
 
-## Build
-
-The canonical release source is VRBrowser-1.0.5.zip. The GitHub Actions workflow extracts and builds that archive, validates applicationId, versionCode, versionName and the APK signature, then uploads VRBrowser-1.0.5-SIGNED-RELEASE.
-
-The repository app/ source files are updated for download review; the canonical archive remains the only release build input.
+The repository's app source tree is now the build source of truth. GitHub Actions builds the signed Release APK from these sources, verifies package name, version code, version name and APK signature, and uploads both the APK and a source archive.
 
 Required GitHub Actions secrets:
 - VR_KEYSTORE_BASE64 (or legacy VR_KEYSTORE_B64)

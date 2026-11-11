@@ -8,6 +8,15 @@ import android.os.Looper
 import android.os.SystemClock
 import android.webkit.CookieManager
 import android.webkit.WebSettings
+import androidx.media3.common.MediaItem
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.transformer.EditedMediaItem
+import androidx.media3.transformer.Composition
+import androidx.media3.transformer.ExportResult
+import androidx.media3.transformer.ExportException
+import androidx.media3.transformer.Transformer
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.io.File
 import java.io.IOException
 import java.io.InterruptedIOException
@@ -24,6 +33,7 @@ object HlsDownloader {
  private val paused=ConcurrentHashMap.newKeySet<String>()
  private val restartRequested=ConcurrentHashMap.newKeySet<String>()
  private val connections=ConcurrentHashMap<String,HttpURLConnection>()
+ private val transformers=ConcurrentHashMap<String,Transformer>()
  private val main=Handler(Looper.getMainLooper())
  private class HttpStatusException(val status:Int):IOException("HTTP ${status}")
  private fun state(c:Context,id:String)=TransferStore.state(c,id).orEmpty()
@@ -32,8 +42,8 @@ object HlsDownloader {
  private fun isStopped(c:Context,id:String)=isPaused(c,id)||isDeleted(c,id)
  fun onNetworkLost(){connections.values.forEach{try{it.disconnect()}catch(_:Exception){}}}
  fun start(context:Context,id:String,callback:(String)->Unit={}){paused.remove(id);if(!running.add(id)){restartRequested.add(id);return};val app=context.applicationContext;pool.execute{try{perform(app,id,callback)}finally{running.remove(id);if(restartRequested.remove(id)&&TransferStore.state(app,id)=="Подготовка")start(app,id,callback)}}}
- fun pause(context:Context,id:String){paused.add(id);TransferStore.setState(context,id,"Пауза");connections.remove(id)?.disconnect()}
- fun delete(context:Context,id:String){paused.add(id);TransferStore.setState(context,id,"Удалено");connections.remove(id)?.disconnect();if(!running.contains(id))cleanup(context,id)}
+ fun pause(context:Context,id:String){paused.add(id);TransferStore.setState(context,id,"Пауза");connections.remove(id)?.disconnect();main.post{try{transformers.remove(id)?.cancel()}catch(_:Exception){}}}
+ fun delete(context:Context,id:String){paused.add(id);TransferStore.setState(context,id,"Удалено");connections.remove(id)?.disconnect();main.post{try{transformers.remove(id)?.cancel()}catch(_:Exception){}};if(!running.contains(id))cleanup(context,id)}
  private fun cleanup(c:Context,id:String){val item=TransferStore.entries(c).firstOrNull{it.id==id};try{item?.uri?.takeIf{it.isNotBlank()}?.let{c.contentResolver.delete(Uri.parse(it),null,null)}}catch(_:Exception){};File(c.filesDir,"hls_${id}").deleteRecursively();File(c.filesDir,"direct_${id}.part").delete();File(c.filesDir,"direct_${id}.meta").delete();TransferStore.remove(c,id)}
  private fun online(c:Context):Boolean=try{val cm=c.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager;val n=cm.activeNetwork;n!=null&&cm.getNetworkCapabilities(n)?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)==true}catch(_:Exception){false}
  private fun awaitNetwork(c:Context,id:String):Boolean{val began=SystemClock.elapsedRealtime();while(SystemClock.elapsedRealtime()-began<10*60*1000L){if(isStopped(c,id))return false;if(online(c))return true;TransferStore.setState(c,id,"Ожидание сети");Thread.sleep(1000)};return false}
@@ -53,18 +63,57 @@ object HlsDownloader {
    finally{connections.remove(id,conn);conn.disconnect()}
   };throw last?:IOException("Не удалось получить HLS-плейлист")
  }
- private data class Variant(val url:URL,val height:Int?,val bandwidth:Long)
- private fun selectVariant(body:String,base:URL,quality:String?):URL{
-  val lines=body.lines();val variants=mutableListOf<Variant>()
-  for(i in lines.indices){val line=lines[i].trim();if(!line.startsWith("#EXT-X-STREAM-INF:"))continue;val child=lines.drop(i+1).firstOrNull{it.isNotBlank()&&!it.trim().startsWith("#")}?:continue
+ private data class Variant(val url:URL,val height:Int?,val name:String?,val bandwidth:Long)
+ private fun selectVariant(body:String,base:URL,quality:String?):URL {
+  val lines=body.lines()
+  val variants=mutableListOf<Variant>()
+  for(i in lines.indices) {
+   val line=lines[i].trim()
+   if(!line.startsWith("#EXT-X-STREAM-INF:"))continue
+   val child=lines.drop(i+1).firstOrNull{it.isNotBlank()&&!it.trim().startsWith("#")}?:continue
    val height=Regex("""RESOLUTION=\d+x(\d+)""").find(line)?.groupValues?.get(1)?.toIntOrNull()
+   val name=Regex("""NAME="([^"]+)"""").find(line)?.groupValues?.get(1)
    val bitrate=Regex("""(?:AVERAGE-BANDWIDTH|BANDWIDTH)=(\d+)""").find(line)?.groupValues?.get(1)?.toLongOrNull()?:0L
-   variants.add(Variant(URL(base,child.trim()),height,bitrate))
+   variants.add(Variant(URL(base,child.trim()),height,name,bitrate))
   }
   check(variants.isNotEmpty()){"В master-плейлисте не найдены варианты качества"}
-  val wanted=quality?.removeSuffix("p")?.toIntOrNull()
-  val selected=if(wanted!=null){variants.filter{it.height!=null}.minByOrNull{abs(it.height!!-wanted)}?:variants.maxByOrNull{it.bandwidth}}else variants.maxByOrNull{it.bandwidth}
-  return selected!!.url
+  val wanted=Regex("""(?i)(\d{3,4})p?""").find(quality.orEmpty())?.groupValues?.get(1)?.toIntOrNull()
+  val selected=when {
+   variants.size==1 -> variants.single()
+   wanted!=null -> variants.firstOrNull{it.height==wanted || it.name?.contains(wanted.toString())==true}
+    ?: throw IOException("Выбранное качество ${wanted}p отсутствует во вложенном плейлисте")
+   else -> throw IOException("Во вложенном HLS-плейлисте несколько вариантов, но выбранное качество не определено. Выбери качество в списке медиа заново.")
+  }
+  return selected.url
+ }
+ @OptIn(UnstableApi::class)
+ private fun convertToMp4(context:Context,id:String,input:File,output:File) {
+  output.delete()
+  val completed=CountDownLatch(1)
+  var failure:Throwable?=null
+  main.post {
+   try {
+    val transformer=Transformer.Builder(context).addListener(object:Transformer.Listener {
+     override fun onCompleted(composition:Composition,result:ExportResult) { completed.countDown() }
+     override fun onError(composition:Composition,result:ExportResult,exception:ExportException) {
+      failure=exception
+      completed.countDown()
+     }
+    }).build()
+    transformers[id]=transformer
+    transformer.start(EditedMediaItem.Builder(MediaItem.fromUri(Uri.fromFile(input))).build(),output.absolutePath)
+   } catch(error:Throwable) {
+    failure=error
+    completed.countDown()
+   }
+  }
+  if(!completed.await(60,TimeUnit.MINUTES)) {
+   main.post { try { transformers.remove(id)?.cancel() } catch(_:Exception) { } }
+   throw IOException("Преобразование TS в MP4 превысило допустимое время")
+  }
+  main.post { transformers.remove(id) }
+  failure?.let { throw IOException("Не удалось преобразовать видео в MP4: ${it.message}",it) }
+  check(output.isFile && output.length()>0L){"После преобразования MP4-файл пуст"}
  }
  private fun isTransportStream(file:File):Boolean{val sample=ByteArray(600);val count=try{file.inputStream().use{input->var n=0;while(n<sample.size){val r=input.read(sample,n,sample.size-n);if(r<=0)break;n+=r};n}}catch(_:Exception){0};if(count<188)return false;for(offset in 0..minOf(32,count-188))if(sample[offset]==0x47.toByte()&&sample[offset+188]==0x47.toByte())return true;return false}
  private fun perform(c:Context,id:String,callback:(String)->Unit){
@@ -103,8 +152,24 @@ object HlsDownloader {
     val elapsed=(SystemClock.elapsedRealtime()-began).coerceAtLeast(1000L);val rate=downloadedThisRun*1000/elapsed;val eta=if(completedThisRun>0)(elapsed/1000.0*(segments.size-done)/completedThisRun).toLong().coerceAtLeast(0)else -1L;publish("Загрузка",progress,rate,eta)
    }
    if(isDeleted(c,id)){cleanup(c,id);return};if(isPaused(c,id)){TransferStore.setState(c,id,"Пауза");return};check(completed()==segments.size){"Не все сегменты загружены"}
-   c.contentResolver.openOutputStream(Uri.parse(initial.uri),"wt")?.use{out->for(i in segments.indices){if(isStopped(c,id))throw InterruptedIOException("Загрузка остановлена");segmentFile(i).inputStream().use{it.copyTo(out,32768)}}}?:error("Не удалось открыть выбранный файл")
-   bytes=totalBytes();if(publish("Готово",100)){folder.deleteRecursively();main.post{callback("Загрузка завершена: ${initial.name}")}}
+   val transport=File(folder,"assembled.ts")
+   java.io.FileOutputStream(transport).use { out ->
+    for(i in segments.indices) {
+     if(isStopped(c,id))throw InterruptedIOException("Загрузка остановлена")
+     segmentFile(i).inputStream().use{it.copyTo(out,32768)}
+    }
+   }
+   val converted=File(folder,"assembled.mp4")
+   if(!publish("Преобразование в MP4",99)) {
+    if(isPaused(c,id))TransferStore.setState(c,id,"Пауза")
+    return
+   }
+   convertToMp4(c,id,transport,converted)
+   if(isDeleted(c,id)){cleanup(c,id);return}
+   if(isPaused(c,id)){TransferStore.setState(c,id,"Пауза");return}
+   c.contentResolver.openOutputStream(Uri.parse(initial.uri),"wt")?.use{out->converted.inputStream().use{it.copyTo(out,32768)}}?:error("Не удалось открыть выбранный MP4-файл")
+   bytes=converted.length()
+   if(publish("Готово",100)){folder.deleteRecursively();main.post{callback("Загрузка завершена: ${initial.name}")}}
   }catch(e:Exception){
    if(isDeleted(c,id)){cleanup(c,id);return};if(isPaused(c,id)){TransferStore.setState(c,id,"Пауза");return};if(restartRequested.contains(id))return
    val status=(e as? HttpStatusException)?.status
