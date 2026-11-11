@@ -606,8 +606,12 @@ class MainActivity : Activity() {
  }
  private fun showTabs() { dialogBuilder().setTitle("Вкладки").setItems(tabs.mapIndexed { i,v -> "${i+1}. ${(v.title?:v.url?:"Новая вкладка").take(55)}" }.toTypedArray()) { _,i -> switchTab(i) }.setPositiveButton("Новая") { _,_->addTab("https://www.google.com") }.setNeutralButton("Закрыть текущую") { _,_-> if(tabs.size>1) { val old=active(); tabs.removeAt(current); pages.removeView(old); old.destroy(); switchTab(tabs.lastIndex) } }.show() }
  private fun showBookmarks() { val list=bookmarks; dialogBuilder().setTitle("Закладки").setItems(list.toTypedArray()) { _,i -> navigate(list[i]) }.setPositiveButton("Добавить текущую") { _,_-> val u=active().url; if(u!=null){ list.remove(u); list.add(u); writeList("bookmarks",list) } }.setNegativeButton("Закрыть",null).show() }
- private fun showMenu() { val choices=arrayOf("История","Библиотека загрузок","Обновить","Очистить историю","Очистить данные сайтов","V&R Shield","Диагностика")
-  dialogBuilder().setItems(choices) { _,i -> when(i) { 0->{ val h=history.reversed(); dialogBuilder().setTitle("История").setItems(h.toTypedArray()) { _,j -> navigate(h[j]) }.show() }; 1->startActivity(Intent(this, LibraryActivity::class.java)); 2->active().reload(); 3->writeList("history",emptyList()); 5->showShield(); 6->startActivity(Intent(this, DiagnosticActivity::class.java)); 4->dialogBuilder().setMessage("Удалить cookies и кэш браузера?").setPositiveButton("Удалить") { _,_->CookieManager.getInstance().removeAllCookies(null); tabs.forEach{it.clearCache(true)} }.setNegativeButton("Отмена",null).show() } }.show()
+ private fun showMenu() { val choices=arrayOf("История","Библиотека загрузок","Обновить","Очистить историю","Очистить данные сайтов","V&R Shield","Диагностика","Автовстраивание V&R Player")
+  dialogBuilder().setItems(choices) { _,i -> when(i) { 0->{ val h=history.reversed(); dialogBuilder().setTitle("История").setItems(h.toTypedArray()) { _,j -> navigate(h[j]) }.show() }; 1->startActivity(Intent(this, LibraryActivity::class.java)); 2->active().reload(); 3->writeList("history",emptyList()); 5->showShield(); 6->startActivity(Intent(this, DiagnosticActivity::class.java)); 7->{
+    val enabled=!prefs.getBoolean("auto_inline_player",true)
+    prefs.edit().putBoolean("auto_inline_player",enabled).apply()
+    Toast.makeText(this,if(enabled)"Автовстраивание включено" else "Автовстраивание выключено",Toast.LENGTH_SHORT).show()
+   }; 4->dialogBuilder().setMessage("Удалить cookies и кэш браузера?").setPositiveButton("Удалить") { _,_->CookieManager.getInstance().removeAllCookies(null); tabs.forEach{it.clearCache(true)} }.setNegativeButton("Отмена",null).show() } }.show()
  }
  private fun showShield() {
   val modes=arrayOf("Выключен", "Сбалансированный", "Строгий")
