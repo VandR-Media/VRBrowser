@@ -1,4 +1,4 @@
-# V&R Browser 1.0.8
+# V&R Browser 1.0.9
 
 Android browser with a native Media3 player, HLS media detection, persistent download library, an in-app ad blocker and a dark cyan/magenta visual identity.
 
@@ -7,15 +7,16 @@ Android browser with a native Media3 player, HLS media detection, persistent dow
 This repository contains **one complete, canonical, directly buildable Android project**.
 It is built from `app/` and Gradle files at the root. All themes, icons, wallpapers and Kotlin sources are tracked in Git. No ZIP archive or older version is used as the source of truth. Signed APK and full source ZIP files are **CI artifacts**, not tracked repository files.
 
-## Fixes in 1.0.8
+## Fixes in 1.0.9
 
-- Startup: register the crash recorder early, run filter subscription updates and transfer recovery off the UI thread, and guard browser lifecycle callbacks.
-- HLS downloads: restore complete, validated segments after pause and resume; derive the manifest identity from stable media segment paths instead of expiring CDN auth tokens.
-- MP4: explicitly select the tracks from `MediaExtractor` before remuxing samples into `MediaMuxer`. This fixes the specific error where tracks were recognized but no samples were read. Remuxes supported AVC/HEVC and AAC without re-encoding; does not relabel TS as MP4.
-- Quality: avoid silent substitution of a different HLS variant and check actual height where Android can probe it. Estimated HLS sizes remain approximate.
-- V&R Player: fullscreen, fit/crop toggle, in-player download with location confirmation, track quality/audio selectors, and a native inline player surface that can cover the website's video element after detecting a qualifying HLS playlist.
-- Design: brighter toolbar buttons and a size-constrained logo-watermark dialog background.
-- Ad filtering: combined AdblockAndroid and V&R Shield, with filter updates in the background. When inline playback succeeds, the original site iframe is suspended so its embedded ads do not continue playing in parallel. Ads multiplexed directly into media streams are not reliably removable.
+- Updated AndroidX WorkManager to 2.12.0 to avoid the device-specific exact-alarm SecurityException during app startup.
+- Saved separate HLS audio playlist URLs per variant, including selected audio language; audio and video are muxed into the same MP4. An output with no audio track is treated as a failed conversion, not a successful silent file.
+- HLS pause/resume preserves completed segments; changed playlists no longer delete partial data without notice. Interrupted alternate-audio downloads are recovered after application restart.
+- Quality labels prioritize real video dimensions probed from the first MPEG-TS segment. If a provider advertises a different resolution, the discrepancy is displayed; unknown HLS file sizes are not invented.
+- Inline player now has native seek, pause, quality, audio, and download controls. Fullscreen playback is edge-to-edge, with a crop-to-fill button available while fullscreen.
+- The app carries file-picker state, selected audio and video quality, and playback position across transitions.
+
+**Important:** Successful GitHub Actions build confirms APK compilation, release signature, and package metadata only. On-device tests are still necessary for Huawei startup, HLS audio timing, network reconnect, and fullscreen/crop playback. Not every stream format can be remuxed without transcoding.
 
 ## Supported downloads and limitations
 
@@ -35,4 +36,4 @@ The build uses the existing release signing certificate. Keep the JKS private an
 
 ## CI artifacts
 
-GitHub Actions uploads `VRBrowser-1.0.8-SIGNED-RELEASE` (the signed APK) and `VRBrowser-1.0.8-SOURCE` (the exact tracked source archive). The repository does not commit APKs, keystores or ZIP builds.
+GitHub Actions uploads `VRBrowser-1.0.9-SIGNED-RELEASE` (the signed APK) and `VRBrowser-1.0.9-SOURCE` (the exact tracked source archive). The repository does not commit APKs, keystores or ZIP builds.
