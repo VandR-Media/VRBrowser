@@ -197,7 +197,8 @@ class MainActivity : Activity() {
     startActivity(Intent(this,PlayerActivity::class.java)
      .putExtra("url",source)
      .putExtra("referer",referer)
-     .putExtra("user_agent",userAgent))
+     .putExtra("user_agent",userAgent)
+     .putExtra("title",active().title ?: "Видео онлайн"))
    }
   }.start()
  }
