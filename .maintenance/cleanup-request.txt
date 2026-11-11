@@ -1,1 +1,0 @@
-Requested by repository owner: retain tracked 1.0.7 Android sources and all artwork; remove obsolete ZIP archives; preserve git history and signing secrets.
