@@ -320,12 +320,17 @@ class PlayerActivity : Activity() {
    android.app.AlertDialog.Builder(this,R.style.VRDialog)
     .setTitle(title)
     .setSingleChoiceItems(labels,selectedIndex) { dialog,which ->
-     val option=options[which]
-     val override=TrackSelectionOverride(option.group.mediaTrackGroup,listOf(option.index))
-     selector.parameters=selector.buildUponParameters()
-      .clearOverridesOfType(trackType)
-      .setOverrideForType(override)
-      .build()
+     try {
+      val option=options[which]
+      val override=TrackSelectionOverride(option.group.mediaTrackGroup,listOf(option.index))
+      selector.parameters=selector.buildUponParameters()
+       .clearOverridesOfType(trackType)
+       .setOverrideForType(override)
+       .build()
+     } catch(error:Exception) {
+      android.util.Log.e("V&R Player","Track override failed",error)
+      Toast.makeText(this,"Не удалось переключить дорожку",Toast.LENGTH_LONG).show()
+     }
      dialog.dismiss()
     }
     .setNeutralButton("Авто") { dialog,_ ->
