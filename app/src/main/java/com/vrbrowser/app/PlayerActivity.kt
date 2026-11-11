@@ -59,6 +59,43 @@ class PlayerActivity : Activity() {
  private lateinit var controlPanel:LinearLayout
  private lateinit var fullscreenButton:TextView
  private lateinit var cropButton:TextView
+ private lateinit var touchLayer:View
+ private lateinit var lockButton:TextView
+ private lateinit var unlockButton:TextView
+ private var controlsLocked=false
+ private var controlsShown=true
+ private val hideControls=Runnable { if(fullscreen && !controlsLocked)showFullscreenControls(false) }
+ private val hideUnlock=Runnable { if(controlsLocked)unlockButton.animate().alpha(0f).setDuration(250).withEndAction { unlockButton.visibility=View.GONE }.start() }
+ private fun showFullscreenControls(show:Boolean) {
+  if(!fullscreen || controlsLocked)return
+  controlsShown=show
+  handler.removeCallbacks(hideControls)
+  listOf(fullscreenControls,fullscreenButton,lockButton).forEach { v ->
+   if(show) { v.visibility=View.VISIBLE; v.animate().cancel(); v.animate().alpha(1f).setDuration(230).start() }
+   else v.animate().alpha(0f).setDuration(260).withEndAction { if(!controlsShown && !controlsLocked)v.visibility=View.GONE }.start()
+  }
+  if(show)handler.postDelayed(hideControls,3000)
+ }
+ private fun setLocked(locked:Boolean) {
+  controlsLocked=locked
+  handler.removeCallbacks(hideControls)
+  handler.removeCallbacks(hideUnlock)
+  if(locked) {
+   fullscreenControls.visibility=View.GONE; fullscreenButton.visibility=View.GONE; lockButton.visibility=View.GONE
+   unlockButton.visibility=View.GONE
+  } else {
+   unlockButton.visibility=View.GONE
+   showFullscreenControls(true)
+  }
+ }
+ private fun revealUnlock() {
+  handler.removeCallbacks(hideUnlock)
+  unlockButton.animate().cancel()
+  unlockButton.visibility=View.VISIBLE
+  unlockButton.alpha=0f
+  unlockButton.animate().alpha(1f).setDuration(160).start()
+  handler.postDelayed(hideUnlock,1500)
+ }
  private var fullscreen=false
  private var cropped=false
  private var pendingDownloadQuality:String?=null
@@ -146,6 +183,13 @@ class PlayerActivity : Activity() {
    setKeepContentOnPlayerReset(true)
   }
   videoStage.addView(playerView,FrameLayout.LayoutParams(-1,-1))
+  touchLayer=View(this).apply {
+   isClickable=true
+   setOnClickListener {
+    if(fullscreen) { if(controlsLocked)revealUnlock() else showFullscreenControls(!controlsShown) }
+   }
+  }
+  videoStage.addView(touchLayer,FrameLayout.LayoutParams(-1,-1))
   fullscreenButton=TextView(this).apply {
    text="⛶"
    textSize=25f
@@ -278,6 +322,24 @@ class PlayerActivity : Activity() {
   videoStage.addView(fullscreenControls,FrameLayout.LayoutParams(-1,dp(60),Gravity.BOTTOM))
   fullscreenControls.bringToFront()
   fullscreenButton.bringToFront()
+  lockButton=TextView(this).apply {
+   text="🔒"; textSize=25f; gravity=Gravity.CENTER
+   setTextColor(Color.WHITE); background=rounded(Color.rgb(29,38,57),15,blue)
+   contentDescription="Заблокировать экран"
+   visibility=View.GONE
+   setOnClickListener { setLocked(true) }
+  }
+  videoStage.addView(lockButton,FrameLayout.LayoutParams(dp(48),dp(44),Gravity.TOP or Gravity.START).apply {
+   setMargins(dp(10),dp(10),0,0)
+  })
+  unlockButton=TextView(this).apply {
+   text="🔓  Разблокировать"; textSize=16f; gravity=Gravity.CENTER
+   setTextColor(Color.WHITE); background=rounded(surface,18,pink)
+   visibility=View.GONE
+   contentDescription="Разблокировать экран"
+   setOnClickListener { setLocked(false) }
+  }
+  videoStage.addView(unlockButton,FrameLayout.LayoutParams(dp(205),dp(54),Gravity.CENTER))
   setContentView(rootLayout)
   pendingDownloadQuality=savedInstanceState?.getString("download_quality")
   pendingAudioLanguage=savedInstanceState?.getString("download_audio")
@@ -355,7 +417,10 @@ class PlayerActivity : Activity() {
   headerContainer.visibility=if(enable)View.GONE else View.VISIBLE
   controlPanel.visibility=if(enable)View.GONE else View.VISIBLE
   bottomSpacer.visibility=if(enable)View.GONE else View.VISIBLE
+  if(!enable && controlsLocked)setLocked(false)
   fullscreenControls.visibility=if(enable)View.VISIBLE else View.GONE
+  lockButton.visibility=if(enable)View.VISIBLE else View.GONE
+  fullscreenControls.alpha=1f; fullscreenButton.alpha=1f; lockButton.alpha=1f
   fullscreenButton.text=if(enable)"⤡" else "⛶"
   rootLayout.setPadding(if(enable)0 else dp(12),if(enable)0 else dp(8),
    if(enable)0 else dp(12),if(enable)0 else dp(12))
@@ -380,6 +445,7 @@ class PlayerActivity : Activity() {
     else android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT
    window.attributes=params
   }
+  if(enable)showFullscreenControls(true) else handler.removeCallbacks(hideControls)
   requestedOrientation=if(enable)ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
    else ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
  }
@@ -558,6 +624,7 @@ class PlayerActivity : Activity() {
 
  override fun onPause() {
   handler.removeCallbacks(progressUpdater)
+  handler.removeCallbacks(hideControls); handler.removeCallbacks(hideUnlock)
   player?.pause()
   super.onPause()
  }
@@ -574,6 +641,7 @@ class PlayerActivity : Activity() {
 
  override fun onDestroy() {
   handler.removeCallbacks(progressUpdater)
+  handler.removeCallbacks(hideControls); handler.removeCallbacks(hideUnlock)
   if(::playerView.isInitialized)playerView.player=null
   player?.release()
   player=null
