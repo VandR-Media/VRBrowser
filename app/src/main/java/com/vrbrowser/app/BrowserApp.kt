@@ -65,7 +65,7 @@ class BrowserApp : Application() {
    try {
     // Recover only jobs which were active before termination; preserve paused jobs.
     TransferStore.entries(this)
-     .filter{it.state in setOf("Загрузка","Подготовка","Ожидание сети","Преобразование в MP4")}
+     .filter{it.state in setOf("Загрузка","Загрузка аудио","Подготовка","Ожидание сети","Преобразование в MP4")}
      .forEach { item ->
       TransferStore.setState(this,item.id,"Подготовка")
       if(item.source.contains(".m3u8",true))HlsDownloader.start(this,item.id)
