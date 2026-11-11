@@ -384,6 +384,16 @@ class PlayerActivity : Activity() {
    else ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
  }
 
+ override fun onConfigurationChanged(newConfig:android.content.res.Configuration){
+  super.onConfigurationChanged(newConfig)
+  if(::videoStage.isInitialized && !fullscreen) {
+   val portraitHeight=((resources.displayMetrics.widthPixels-dp(24))*9/16).coerceAtLeast(dp(160))
+   videoStage.layoutParams=LinearLayout.LayoutParams(-1,portraitHeight).apply{
+    setMargins(0,dp(4),0,dp(12))
+   }
+  }
+ }
+
  override fun onWindowFocusChanged(hasFocus:Boolean){
   super.onWindowFocusChanged(hasFocus)
   if(hasFocus && fullscreen){
