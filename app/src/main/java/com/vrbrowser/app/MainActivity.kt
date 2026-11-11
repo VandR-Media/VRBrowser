@@ -219,96 +219,105 @@ class MainActivity : Activity() {
   bytes >= 1073741824L -> "≈ %.2f ГБ".format(java.util.Locale.US, bytes / 1073741824.0)
   else -> "≈ %.1f МБ".format(java.util.Locale.US, bytes / 1048576.0)
  }
- private fun remoteLength(url: String, referer: String): Long? {
+ private fun remoteLength(url: String, referer: String, userAgent:String): Long? {
   return try {
    val conn=(java.net.URL(url).openConnection() as java.net.HttpURLConnection).apply {
-    requestMethod="HEAD"; connectTimeout=2500; readTimeout=2500
-    setRequestProperty("User-Agent","Mozilla/5.0 (Android) V&R Browser")
+    requestMethod="HEAD"; connectTimeout=2500; readTimeout=2500; instanceFollowRedirects=true
+    setRequestProperty("User-Agent",userAgent)
     if(referer.startsWith("http"))setRequestProperty("Referer",referer)
-     CookieManager.getInstance().getCookie(url)?.takeIf{it.isNotBlank()}?.let{setRequestProperty("Cookie",it)}
+    CookieManager.getInstance().getCookie(url)?.takeIf{it.isNotBlank()}?.let{setRequestProperty("Cookie",it)}
    }
    try { if(conn.responseCode in 200..299) conn.getHeaderField("Content-Length")?.toLongOrNull()?.takeIf{it>0L} else null }
    finally {conn.disconnect()}
-  } catch (_:Exception) {null}
+  } catch (_:Exception) { null }
  }
- private fun estimateHls(url:String, referer:String, depth:Int=0): Pair<Long?,Long?> {
+ private fun estimateHls(url:String,referer:String,userAgent:String,depth:Int=0):Pair<Long?,Long?> {
   if(depth>2)return Pair(null,null)
   return try {
-   val conn=(java.net.URL(url).openConnection() as java.net.HttpURLConnection).apply {
-    connectTimeout=3500;readTimeout=3500
-    setRequestProperty("User-Agent","Mozilla/5.0 (Android) V&R Browser")
-    if(referer.startsWith("http"))setRequestProperty("Referer",referer)
-   }
-   val playlist=try { conn.inputStream.bufferedReader().use {it.readText().take(400000)} } finally {conn.disconnect()}
-   if(!playlist.startsWith("#EXTM3U"))return Pair(null,null)
+   val playlist=readHlsPlaylist(url,referer,userAgent)
+   if(!playlist.trimStart().startsWith("#EXTM3U"))return Pair(null,null)
    val lines=playlist.lines()
-   val variants=lines.mapIndexedNotNull {i,line ->
-    if(!line.startsWith("#EXT-X-STREAM-INF"))null else {
-     val bitrate=Regex("(?:AVERAGE-BANDWIDTH|BANDWIDTH)=(\\d+)").find(line)?.groupValues?.get(1)?.toLongOrNull()
-     val child=lines.drop(i+1).firstOrNull{it.isNotBlank()&&!it.startsWith("#")}
-     if(bitrate!=null && child!=null) Pair(bitrate,child) else null
+   val variants=lines.mapIndexedNotNull { i,line ->
+    if(!line.trim().startsWith("#EXT-X-STREAM-INF"))null else {
+     val bitrate=Regex("""(?:AVERAGE-BANDWIDTH|BANDWIDTH)=(\d+)""").find(line)?.groupValues?.get(1)?.toLongOrNull()
+     val child=lines.drop(i+1).firstOrNull{it.isNotBlank()&&!it.trim().startsWith("#")}
+     if(bitrate!=null && child!=null) Pair(bitrate,child.trim()) else null
     }
    }
    if(variants.isNotEmpty()) {
-    if(variants.size!=1) return Pair(null,null)
-   val best=variants.single()
-    val child=java.net.URL(java.net.URL(url),best.second).toString()
-    val nested=estimateHls(child,referer,depth+1)
-    return Pair(nested.first, nested.first?.let{(it/1000.0*best.first/8.0).toLong()} ?: nested.second)
+    if(variants.size!=1)return Pair(null,null)
+    val only=variants.single()
+    val nested=estimateHls(java.net.URL(java.net.URL(url),only.second).toString(),referer,userAgent,depth+1)
+    val bandwidthEstimate=nested.first?.let{(it/1000.0*only.first/8.0).toLong()}
+    return Pair(nested.first,nested.second ?: bandwidthEstimate)
    }
-   val seconds=Regex("#EXTINF:([0-9]+(?:\\.[0-9]+)?)").findAll(playlist).sumOf{it.groupValues[1].toDoubleOrNull()?:0.0}
+   val seconds=Regex("""#EXTINF:([0-9]+(?:\.[0-9]+)?)""").findAll(playlist).sumOf{it.groupValues[1].toDoubleOrNull()?:0.0}
    val duration=if(seconds>0)(seconds*1000).toLong() else null
-   val segments=lines.filter{it.isNotBlank()&&!it.startsWith("#")}
-   val sample=segments.take(3).mapNotNull { segment -> remoteLength(java.net.URL(java.net.URL(url),segment).toString(),referer) }
-   val estimate=if(sample.isNotEmpty()&&segments.isNotEmpty())(sample.average()*segments.size).toLong() else null
+   val segments=lines.map{it.trim()}.filter{it.isNotBlank()&&!it.startsWith("#")}
+   if(segments.isEmpty())return Pair(duration,null)
+   val indices=if(segments.size<=5)segments.indices.toList() else listOf(0,segments.size/4,segments.size/2,(segments.size*3)/4,segments.lastIndex).distinct()
+   val sample=indices.mapNotNull{i->remoteLength(java.net.URL(java.net.URL(url),segments[i]).toString(),referer,userAgent)}
+   val estimate=if(sample.isNotEmpty())(sample.average()*segments.size).toLong() else null
    Pair(duration,estimate)
-  }catch (_:Exception){Pair(null,null)}
+  } catch(_:Exception){Pair(null,null)}
  }
- private fun inspectMedia(url: String, referer: String): MediaDetails {
-  var quality: String? = null
-  var duration: Long? = null
-  var frame: android.graphics.Bitmap? = null
-  var estimatedBytes: Long? = null
-  // Metadata lookup is strictly best effort and never blocks the browser UI.
-  if (url.contains(".m3u8",true)) {
-   try {
-    val conn = (java.net.URL(url).openConnection() as java.net.HttpURLConnection).apply {
-     connectTimeout=3500; readTimeout=3500
-     setRequestProperty("User-Agent", "Mozilla/5.0 (Android) V&R Browser")
-     if(referer.startsWith("http"))setRequestProperty("Referer",referer)
-    }
-    try {
-     val playlist = conn.inputStream.bufferedReader().use { it.readText().take(350000) }
-     if (playlist.startsWith("#EXTM3U")) {
-      val resolution = Regex("RESOLUTION=(\\d+)x(\\d+)").find(playlist)
-      if (resolution != null && !playlist.contains("#EXT-X-STREAM-INF:")) quality = "${resolution.groupValues[2]}p"
-      if (playlist.contains("#EXTINF:")) {
-       val seconds = Regex("#EXTINF:([0-9]+(?:\\.[0-9]+)?)").findAll(playlist)
-        .sumOf { it.groupValues[1].toDoubleOrNull() ?: 0.0 }
-       if (seconds > 0.0) duration=(seconds*1000).toLong()
-      }
-     }
-    } finally { conn.disconnect() }
-   } catch (_: Exception) { }
-  }
+ private fun probeHlsResolution(url:String,referer:String,userAgent:String):Pair<String?,android.graphics.Bitmap?> {
+  var retriever:android.media.MediaMetadataRetriever?=null
+  return try {
+   val playlist=readHlsPlaylist(url,referer,userAgent)
+   if(playlist.contains("#EXT-X-STREAM-INF"))return Pair(null,null)
+   val segment=playlist.lines().firstOrNull{it.isNotBlank()&&!it.trim().startsWith("#")} ?: return Pair(null,null)
+   val segmentUrl=java.net.URL(java.net.URL(url),segment.trim()).toString()
+   val headers=linkedMapOf("User-Agent" to userAgent)
+   if(referer.startsWith("http"))headers["Referer"]=referer
+   CookieManager.getInstance().getCookie(segmentUrl)?.takeIf{it.isNotBlank()}?.let{headers["Cookie"]=it}
+   retriever=android.media.MediaMetadataRetriever()
+   retriever.setDataSource(segmentUrl,headers)
+   val height=retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull()
+   val frame=try{retriever.getFrameAtTime(0,android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC)}catch(_:Exception){null}
+   Pair(height?.takeIf{it>0}?.let{"${it}p"},frame)
+  } catch(_:Exception){Pair(null,null)}
+  finally { try{retriever?.release()}catch(_:Exception){} }
+ }
+ private fun inspectMedia(url: String, referer: String, userAgent:String): MediaDetails {
+  var quality:String?=null
+  var duration:Long?=null
+  var frame:android.graphics.Bitmap?=null
+  var estimatedBytes:Long?=null
   if(url.contains(".m3u8",true)) {
-   val estimate=estimateHls(url,referer)
-   if(duration==null)duration=estimate.first
-   estimatedBytes=estimate.second
-  } else if(!url.contains(".mpd",true)) {
-   estimatedBytes=remoteLength(url,referer)
-  }
-  if (!url.contains(".m3u8",true)) try {
-   val retriever = android.media.MediaMetadataRetriever()
    try {
-    retriever.setDataSource(url, mapOf("User-Agent" to "Mozilla/5.0 (Android)", "Referer" to referer))
-    val height = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull()
-    if (height != null && height > 0) quality="${height}p"
-    val length = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()
-    if (length != null && length > 0) duration=length
-    frame = retriever.getFrameAtTime(1000000L, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
-   } finally { retriever.release() }
-  } catch (_: Exception) { }
+    val playlist=readHlsPlaylist(url,referer,userAgent)
+    if(!playlist.contains("#EXT-X-STREAM-INF")) {
+     val resolution=Regex("""RESOLUTION=(\d+)x(\d+)""").find(playlist)
+     if(resolution!=null)quality="${resolution.groupValues[2]}p"
+     val seconds=Regex("""#EXTINF:([0-9]+(?:\.[0-9]+)?)""").findAll(playlist).sumOf{it.groupValues[1].toDoubleOrNull()?:0.0}
+     if(seconds>0)duration=(seconds*1000).toLong()
+    }
+   } catch(_:Exception) { }
+   val estimate=estimateHls(url,referer,userAgent)
+   duration=duration ?: estimate.first
+   estimatedBytes=estimate.second
+   if(quality==null) {
+    val probe=probeHlsResolution(url,referer,userAgent)
+    quality=probe.first
+    frame=probe.second
+   }
+  } else if(!url.contains(".mpd",true)) {
+   estimatedBytes=remoteLength(url,referer,userAgent)
+   var retriever:android.media.MediaMetadataRetriever?=null
+   try {
+    val headers=linkedMapOf("User-Agent" to userAgent)
+    if(referer.startsWith("http"))headers["Referer"]=referer
+    CookieManager.getInstance().getCookie(url)?.takeIf{it.isNotBlank()}?.let{headers["Cookie"]=it}
+    retriever=android.media.MediaMetadataRetriever()
+    retriever.setDataSource(url,headers)
+    duration=retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()?.div(1000)
+    val height=retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull()
+    quality=height?.takeIf{it>0}?.let{"${it}p"}
+    frame=retriever.getFrameAtTime(1000000L,android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+   } catch(_:Exception) { }
+   finally { try{retriever?.release()}catch(_:Exception){} }
+  }
   return MediaDetails(quality,duration,frame,estimatedBytes)
  }
  private data class StreamEntry(val url: String, val quality: String? = null, val bitrate: Long? = null)
@@ -405,10 +414,14 @@ class MainActivity : Activity() {
       list.addView(item)
       list.addView(View(this).apply { setBackgroundColor(Color.rgb(53,64,83)) },LinearLayout.LayoutParams(-1,dp(1)))
       Thread {
-       val details=inspectMedia(url,referer)
+       val details=inspectMedia(url,referer,userAgent)
        runOnUiThread {
         if (isFinishing || isDestroyed) return@runOnUiThread
-        val resolution=entry.quality ?: details.quality ?: "Качество неизвестно"
+        val resolution=details.quality ?: entry.quality ?: "Качество неизвестно"
+        knownQualities[url]=resolution
+        download.contentDescription="Скачать $resolution"
+        download.setOnClickListener { confirmDownload(url,"video","","",resolution) }
+        info.setOnClickListener { showMediaActions(url,"${index+1}. $resolution") }
         val size=details.estimatedBytes
         metadata.text="${mediaType(url).substringBefore(" · ")} · $resolution · ${details.durationMs?.let { prettyDuration(it) } ?: "Длительность неизвестна"} · ${prettySize(size)}"
         details.frame?.let { bitmap ->
