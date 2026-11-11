@@ -210,6 +210,13 @@ object HlsDownloader {
      }
      if(isDeleted(c,id)){cleanup(c,id);return};if(isPaused(c,id)){TransferStore.setState(c,id,"Пауза");return};if(!target.isFile||target.length()==0L){if(last!=null)throw IOException("Сегмент ${index+1}: ${last.message}",last);throw IOException("Ожидание сети")}
     }
+    if(index==0) {
+     val requested=qualityHeight(initial.quality)
+     val actual=videoHeight(target)
+     if(requested!=null && actual!=null && kotlin.math.abs(requested-actual)>24) {
+      throw IOException("Выбран вариант ${requested}p, но первый сегмент содержит ${actual}p. Выбранный поток не соответствует качеству.")
+     }
+    }
     bytes=totalBytes();val done=completed();progress=(done*99/segments.size).coerceIn(0,99);if(!existed){downloadedThisRun+=target.length();completedThisRun++}
     val elapsed=(SystemClock.elapsedRealtime()-began).coerceAtLeast(1000L);val rate=downloadedThisRun*1000/elapsed;val eta=if(completedThisRun>0)(elapsed/1000.0*(segments.size-done)/completedThisRun).toLong().coerceAtLeast(0)else -1L;publish("Загрузка",progress,rate,eta)
    }
