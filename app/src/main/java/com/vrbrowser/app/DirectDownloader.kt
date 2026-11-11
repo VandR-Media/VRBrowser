@@ -39,7 +39,7 @@ object DirectDownloader {
    try{run(app,id)}
    finally {
     active.remove(id)
-    if(restartRequested.remove(id) && !paused.contains(id) && TransferStore.state(app,id)!="Удалено"){
+    if(restartRequested.remove(id) && !paused.contains(id) && TransferStore.state(app,id) !in setOf("Удалено","Готово")){
      TransferStore.setState(app,id,"Подготовка")
      start(app,id)
     }
