@@ -1,10 +1,10 @@
-name: V&R Browser 1.0.9 — native player, MP4 and ad filtering
+name: V&R Browser 1.0.10 — native player, MP4 and ad filtering
 on:
   workflow_dispatch:
   push:
     branches:
       - main
-      - fix/1.0.9-startup-audio-hls-fullscreen
+      - fix/1.0.10-startup-audio-hls-fullscreen
     paths:
       - 'app/**'
       - 'build.gradle.kts'
@@ -98,29 +98,29 @@ jobs:
           META="$("$AAPT" dump badging "$APK" | head -n 1)"
           echo "$META"
           [[ "$META" == *"name='com.vrbrowser.app'"* ]]
-          [[ "$META" == *"versionCode='1009'"* ]]
-          [[ "$META" == *"versionName='1.0.9'"* ]]
+          [[ "$META" == *"versionCode='1010'"* ]]
+          [[ "$META" == *"versionName='1.0.10'"* ]]
           "$SIGNER" verify --verbose --print-certs "$APK"
           mkdir -p "$RUNNER_TEMP/vr-output"
-          cp "$APK" "$RUNNER_TEMP/vr-output/VRBrowser-1.0.9-signed-release.apk"
-          sha256sum "$RUNNER_TEMP/vr-output/VRBrowser-1.0.9-signed-release.apk"
+          cp "$APK" "$RUNNER_TEMP/vr-output/VRBrowser-1.0.10-signed-release.apk"
+          sha256sum "$RUNNER_TEMP/vr-output/VRBrowser-1.0.10-signed-release.apk"
       - name: Upload signed Release APK
         uses: actions/upload-artifact@v4
         with:
-          name: VRBrowser-1.0.9-SIGNED-RELEASE
-          path: ${{ runner.temp }}/vr-output/VRBrowser-1.0.9-signed-release.apk
+          name: VRBrowser-1.0.10-SIGNED-RELEASE
+          path: ${{ runner.temp }}/vr-output/VRBrowser-1.0.10-signed-release.apk
           if-no-files-found: error
           retention-days: 30
       - name: Package complete tracked source archive
         shell: bash
         run: |
           set -euo pipefail
-          git archive --format=zip --output="$RUNNER_TEMP/VRBrowser-1.0.9-SOURCE.zip" HEAD
-          unzip -tq "$RUNNER_TEMP/VRBrowser-1.0.9-SOURCE.zip"
+          git archive --format=zip --output="$RUNNER_TEMP/VRBrowser-1.0.10-SOURCE.zip" HEAD
+          unzip -tq "$RUNNER_TEMP/VRBrowser-1.0.10-SOURCE.zip"
       - name: Upload source archive
         uses: actions/upload-artifact@v4
         with:
-          name: VRBrowser-1.0.9-SOURCE
-          path: ${{ runner.temp }}/VRBrowser-1.0.9-SOURCE.zip
+          name: VRBrowser-1.0.10-SOURCE
+          path: ${{ runner.temp }}/VRBrowser-1.0.10-SOURCE.zip
           if-no-files-found: error
           retention-days: 30
