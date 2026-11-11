@@ -336,7 +336,7 @@ class MainActivity : Activity() {
      val child=lines.drop(index+1).firstOrNull{it.isNotBlank()&&!it.trim().startsWith("#")}
      if(child==null)null else {
       val height=Regex("""RESOLUTION=\d+x(\d+)""").find(tag)?.groupValues?.get(1)?.toIntOrNull()
-      val name=Regex("NAME=\\"([^\\"]+)\\"").find(tag)?.groupValues?.get(1)
+      val name=Regex("NAME=\"([^\"]+)\"").find(tag)?.groupValues?.get(1)
       val namedQuality=name?.let { raw ->
        val match=Regex("""(?i)(\d{3,4})p?""").find(raw)
        match?.let{"${it.groupValues[1]}p"} ?: raw.take(40)

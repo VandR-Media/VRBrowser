@@ -72,7 +72,7 @@ object HlsDownloader {
    if(!line.startsWith("#EXT-X-STREAM-INF:"))continue
    val child=lines.drop(i+1).firstOrNull{it.isNotBlank()&&!it.trim().startsWith("#")}?:continue
    val height=Regex("""RESOLUTION=\d+x(\d+)""").find(line)?.groupValues?.get(1)?.toIntOrNull()
-   val name=Regex("NAME=\\"([^\\"]+)\\"").find(line)?.groupValues?.get(1)
+   val name=Regex("NAME=\"([^\"]+)\"").find(line)?.groupValues?.get(1)
    val bitrate=Regex("""(?:AVERAGE-BANDWIDTH|BANDWIDTH)=(\d+)""").find(line)?.groupValues?.get(1)?.toLongOrNull()?:0L
    variants.add(Variant(URL(base,child.trim()),height,name,bitrate))
   }
