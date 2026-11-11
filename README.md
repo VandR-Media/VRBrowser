@@ -1,3 +1,30 @@
+# V&R Browser 1.0.11 (security candidate)
+
+> **Security status: preliminary source hardening, NOT an audited secure browser.**
+> APK compilation, dependency vulnerability checks, on-device Huawei validation and anti-phishing behavior must be verified before a release claim.
+
+## Security changes pending validation
+
+- WebView disallows mixed HTTP content and file URL access; HTTPS certificate failures are explicitly cancelled.
+- Known Safe Browsing hits are rejected (subject to the availability of the device's WebView safe browsing provider).
+- External links only open through user-confirmed `tel:`, `mailto:`, `sms:` and `smsto:` navigation.
+- Third-party cookies are disabled by default; a browser-menu toggle restores compatibility if required.
+- Full site-data cleanup includes cookies, WebStorage, in-WebView history, browser history and cache.
+- V&R Shield can update StevenBlack and AdAway domain-hosts lists over HTTPS, reject malformed/oversized files, preserve older lists on download failure, and enable/disable sources independently.
+- Existing AdFilter engine still performs rule-based/cosmetic filtering; host blocklists alone cannot hide ads served from a site's own domain.
+
+## Known security limitations
+
+- Safe Browsing availability on Huawei/EMUI without Google Mobile Services needs testing.
+- JavaScript, website cookies and DOM storage are supported for website compatibility; they are not private browsing.
+- File downloads are not antivirus-scanned. Only open files from trusted sources.
+- Third-party library `ad-filter:master-SNAPSHOT` remains unpinned and needs a reproducible build and dependency vulnerability review.
+- The current `Shield` exclusions only apply to the additional host blocker; they do not globally disable the AdFilter rule engine.
+- HTTPS-only site navigation, download redirects, site-isolated permission prompts and malicious-site test suites require further work.
+- These changes should not be merged or described as fully secure before successful CI plus on-device regression testing.
+
+---
+
 # V&R Browser 1.0.9
 
 Android browser with a native Media3 player, HLS media detection, persistent download library, an in-app ad blocker and a dark cyan/magenta visual identity.
