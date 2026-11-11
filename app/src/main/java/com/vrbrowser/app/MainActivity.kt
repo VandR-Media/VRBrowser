@@ -150,10 +150,12 @@ class MainActivity : Activity() {
   val direct=urls.lastOrNull{Regex("\\.(mp4|m4v|webm)(\\?|#|$)",RegexOption.IGNORE_CASE).containsMatchIn(it)}
   if(hls.isEmpty() && direct==null) { Toast.makeText(this,"Поток ещё не найден. Запусти видео на странице и попробуй снова.",Toast.LENGTH_LONG).show(); return }
   val web=active()
+  val referer=web.url.orEmpty()
+  val userAgent=web.settings.userAgentString
   Thread {
    val master=hls.asReversed().firstOrNull { candidate ->
     try {
-     val body=readHlsPlaylist(candidate,web.url.orEmpty())
+     val body=readHlsPlaylist(candidate,referer,userAgent)
      body.contains("#EXT-X-STREAM-INF") || body.contains("#EXT-X-MEDIA:TYPE=AUDIO")
     } catch (_:Exception) { false }
    }
@@ -162,8 +164,8 @@ class MainActivity : Activity() {
     if(source.isNullOrBlank() || isFinishing) return@runOnUiThread
     startActivity(Intent(this,PlayerActivity::class.java)
      .putExtra("url",source)
-     .putExtra("referer",web.url.orEmpty())
-     .putExtra("user_agent",web.settings.userAgentString))
+     .putExtra("referer",referer)
+     .putExtra("user_agent",userAgent))
    }
   }.start()
  }
@@ -306,21 +308,21 @@ class MainActivity : Activity() {
  }
  private data class StreamEntry(val url: String, val quality: String? = null, val bitrate: Long? = null)
  private data class HlsVariant(val url:String,val quality:String?,val bitrate:Long?)
- private fun readHlsPlaylist(url:String,referer:String):String {
+ private fun readHlsPlaylist(url:String,referer:String,userAgent:String):String {
   val conn=(java.net.URL(url).openConnection() as java.net.HttpURLConnection).apply {
    connectTimeout=5000; readTimeout=7000; instanceFollowRedirects=true
-   setRequestProperty("User-Agent",WebSettings.getDefaultUserAgent(this@MainActivity))
+   setRequestProperty("User-Agent",userAgent.takeIf{it.isNotBlank()} ?: WebSettings.getDefaultUserAgent(this@MainActivity))
    setRequestProperty("Accept","*/*")
    if(referer.startsWith("http"))setRequestProperty("Referer",referer)
    CookieManager.getInstance().getCookie(url)?.takeIf{it.isNotBlank()}?.let{setRequestProperty("Cookie",it)}
   }
   return try { conn.inputStream.bufferedReader().use{it.readText().take(600000)} } finally { conn.disconnect() }
  }
- private fun expandStreams(url:String,referer:String,depth:Int=0,inheritedQuality:String?=null,inheritedBitrate:Long?=null,visited:Set<String> = emptySet()):List<StreamEntry> {
+ private fun expandStreams(url:String,referer:String,userAgent:String,depth:Int=0,inheritedQuality:String?=null,inheritedBitrate:Long?=null,visited:Set<String> = emptySet()):List<StreamEntry> {
   if(!url.contains(".m3u8",true))return listOf(StreamEntry(url,inheritedQuality,inheritedBitrate))
   if(depth>4 || url in visited)return listOf(StreamEntry(url,inheritedQuality ?: "Качество неизвестно",inheritedBitrate))
   return try {
-   val content=readHlsPlaylist(url,referer)
+   val content=readHlsPlaylist(url,referer,userAgent)
    if(!content.trimStart().startsWith("#EXTM3U"))return listOf(StreamEntry(url,inheritedQuality ?: "Качество неизвестно",inheritedBitrate))
    val lines=content.lines()
    val variants=lines.mapIndexedNotNull { index,line ->
@@ -343,7 +345,7 @@ class MainActivity : Activity() {
    if(variants.isEmpty())return listOf(StreamEntry(url,inheritedQuality ?: "Качество неизвестно",inheritedBitrate))
    variants.flatMap { variant ->
     val label=variant.quality ?: inheritedQuality ?: variant.bitrate?.let{"Битрейт %.2f Мбит/с".format(java.util.Locale.getDefault(),it/1000000.0)} ?: "Качество неизвестно"
-    expandStreams(variant.url,referer,depth+1,label,variant.bitrate ?: inheritedBitrate,visited+url).map { leaf ->
+    expandStreams(variant.url,referer,userAgent,depth+1,label,variant.bitrate ?: inheritedBitrate,visited+url).map { leaf ->
      leaf.copy(
       quality=if(leaf.quality.isNullOrBlank() || leaf.quality=="Качество неизвестно") label else leaf.quality,
       bitrate=leaf.bitrate ?: variant.bitrate ?: inheritedBitrate
@@ -362,9 +364,10 @@ class MainActivity : Activity() {
    if (urls.isEmpty()) { alert("Медиа", "Запусти видео на странице и попробуй снова."); return@postDelayed }
    val pageTitle=active().title?.take(48) ?: "Видео со страницы"
    val referer=active().url.orEmpty()
+   val userAgent=active().settings.userAgentString
    Toast.makeText(this,"Определяем варианты качества…",Toast.LENGTH_SHORT).show()
    Thread {
-    val entries=urls.flatMap { expandStreams(it,referer) }.distinctBy { it.url }.take(35)
+    val entries=urls.flatMap { expandStreams(it,referer,userAgent) }.distinctBy { it.url }.take(35)
     runOnUiThread {
      if (isFinishing || isDestroyed) return@runOnUiThread
      val list=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL; setPadding(dp(8),dp(6),dp(8),dp(6)) }
