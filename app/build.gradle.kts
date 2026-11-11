@@ -1,6 +1,20 @@
 plugins { id("com.android.application"); id("org.jetbrains.kotlin.android") }
 android { namespace = "com.vrbrowser.app"; compileSdk = 35
- defaultConfig { applicationId = "com.vrbrowser.app"; minSdk = 26; targetSdk = 35; versionCode = 4; versionName = "0.3.1" }
+ defaultConfig { applicationId = "com.vrbrowser.app"; minSdk = 26; targetSdk = 35; versionCode = 1005; versionName = "1.0.5" }
+ signingConfigs {
+  create("persistent") {
+   storeFile = file(System.getenv("VR_KEYSTORE_PATH") ?: "vrbrowser-signing.jks")
+   storePassword = System.getenv("VR_KEYSTORE_PASSWORD") ?: ""
+   keyAlias = System.getenv("VR_KEY_ALIAS") ?: "vrbrowser"
+   keyPassword = System.getenv("VR_KEY_PASSWORD") ?: ""
+  }
+ }
+ buildTypes { getByName("release") {
+  isMinifyEnabled = false
+  if (!System.getenv("VR_KEYSTORE_PATH").isNullOrBlank()) {
+   signingConfig = signingConfigs.getByName("persistent")
+  }
+ } }
  compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
  kotlinOptions { jvmTarget = "17" }
 }

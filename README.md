@@ -1,22 +1,36 @@
-# V&R Browser v0.3 — Android project (not a verified APK)
+# V&R Browser 1.0.5
 
-Target: Huawei Pura 80 Ultra, EMUI 15. Kotlin, Android WebView, Media3.
+Android browser for Huawei / Android devices. Kotlin, WebView and Media3.
 
-## Added in v0.3
-- V&R Shield: enabled by default in balanced mode. Host-level blocking for third-party subresources via WebView.shouldInterceptRequest. Toggle Off/Balanced/Strict; strict currently uses same domain rules (additional strict filtering not implemented).
-- Weekly refresh of a public hosts-format filter over HTTPS on a background executor; 5 MB cap, basic validation, cached copy and bundled fallback. Manual refresh and editable domain exceptions.
-- GitHub Actions workflow builds a debug APK and uploads an artifact on manual run. No credentials needed for a debug build.
+## 1.0.5 — download reliability
 
-## Current limitations
-- Not a full Adblock Plus/EasyList parser. No cosmetic filtering or first-party page context handling; exceptions are by request hostname, not the top-level page. Some ads remain and some sites may break.
-- Direct downloads only via DownloadManager. HLS/DASH can be played if compatible, but are NOT yet assembled or converted. MP3 transcoding, background media service, resumable conversion jobs and full QA are pending. DRM bypass is out of scope.
-- This environment has Java but no Android SDK or Gradle, so APK could not be built or tested here.
+- HLS pause interrupts the active segment request instead of only changing the label.
+- Resume reuses only fully written segments from the same playlist fingerprint.
+- HLS and direct downloads use the browser's current WebView User-Agent, Referer and Cookie header.
+- Direct-file resume validates the server's Content-Range offset and uses If-Range with ETag / Last-Modified when available.
+- Network loss interrupts stale connections; transient failures wait for connectivity and retry.
+- Interrupted transfers are recovered when the app process starts again. Explicitly paused tasks are not auto-started.
+- The Storage Access Framework write permission is persisted so a selected destination can survive an app restart.
+- Progress remains below 100% until the final output file has been written successfully.
+- A 401/403 is reported as an expired/session-bound link. The library offers to reopen the source page; a fresh stream must be selected there.
+- Media metadata requests now include WebView cookies. File opening uses the MIME type derived from the actual extension.
 
-## Build in GitHub Actions
-1. Create a private GitHub repository and upload **the contents** of this folder (including `.github`).
-2. Go to Actions > Android APK > Run workflow.
-3. If the build succeeds, open the workflow run and download the `VRBrowser-debug-apk` artifact. Extract the ZIP and install the APK on your device after reviewing it.
-4. For real distribution, use a release keystore and secure signing; debug APK is for testing only.
+## HLS support and limitations
 
-## Local build
-Install Android SDK 35, JDK 17, Gradle 8.11.1. Run `gradle assembleDebug` in project root. Build dependencies require network access.
+The downloader assembles finite, unencrypted MPEG-TS HLS playlists. It does not bypass DRM. Live streams, AES-128 encrypted streams, fMP4 (EXT-X-MAP), byte-range playlists, DASH and some non-TS segment formats are not supported and should report a clear error instead of producing a misleading completed file.
+
+Displayed size in the media finder is an estimate. The download library reports the bytes actually written to the output file.
+
+## Build
+
+The canonical release source is VRBrowser-1.0.5.zip. The GitHub Actions workflow extracts and builds that archive, validates applicationId, versionCode, versionName and the APK signature, then uploads VRBrowser-1.0.5-SIGNED-RELEASE.
+
+The repository app/ source files are updated for download review; the canonical archive remains the only release build input.
+
+Required GitHub Actions secrets:
+- VR_KEYSTORE_BASE64 (or legacy VR_KEYSTORE_B64)
+- VR_KEYSTORE_PASSWORD
+- VR_KEY_ALIAS
+- VR_KEY_PASSWORD
+
+Keep using the same release keystore for every update. Changing the signing certificate prevents Android from installing the new APK over an existing installation.
