@@ -44,7 +44,7 @@ object HlsDownloader {
    try{perform(app,id,callback)}
    finally{
     running.remove(id)
-    if(restartRequested.remove(id) && !paused.contains(id) && TransferStore.state(app,id)!="Удалено"){
+    if(restartRequested.remove(id) && !paused.contains(id) && TransferStore.state(app,id) !in setOf("Удалено","Готово")){
      TransferStore.setState(app,id,"Подготовка")
      start(app,id,callback)
     }
