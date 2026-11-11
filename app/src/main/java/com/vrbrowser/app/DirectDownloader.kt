@@ -28,10 +28,24 @@ object DirectDownloader {
  private fun isDeleted(c:Context,id:String)=state(c,id)=="Удалено"
  private fun isStopped(c:Context,id:String)=isPaused(c,id)||isDeleted(c,id)
  fun onNetworkLost(){connections.values.forEach{try{it.disconnect()}catch(_:Exception){}}}
- fun pause(c:Context,id:String){paused.add(id);TransferStore.setState(c,id,"Пауза");connections.remove(id)?.disconnect()}
+ fun pause(c:Context,id:String){restartRequested.remove(id);paused.add(id);TransferStore.setState(c,id,"Пауза");connections.remove(id)?.disconnect()}
  fun delete(c:Context,id:String){paused.add(id);TransferStore.setState(c,id,"Удалено");connections.remove(id)?.disconnect();if(!active.contains(id))cleanup(c,id)}
  private fun cleanup(c:Context,id:String){val item=TransferStore.entries(c).firstOrNull{it.id==id};File(c.filesDir,"direct_${id}.part").delete();File(c.filesDir,"direct_${id}.meta").delete();try{item?.uri?.takeIf{it.isNotBlank()}?.let{c.contentResolver.delete(Uri.parse(it),null,null)}}catch(_:Exception){};TransferStore.remove(c,id)}
- fun start(context:Context,id:String){if(!active.add(id)){restartRequested.add(id);return};paused.remove(id);pool.execute{try{run(context.applicationContext,id)}finally{active.remove(id);if(restartRequested.remove(id)&&TransferStore.state(context,id)=="Подготовка")start(context,id)}}}
+ fun start(context:Context,id:String){
+  val app=context.applicationContext
+  paused.remove(id)
+  if(!active.add(id)){restartRequested.add(id);return}
+  pool.execute {
+   try{run(app,id)}
+   finally {
+    active.remove(id)
+    if(restartRequested.remove(id) && !paused.contains(id) && TransferStore.state(app,id)!="Удалено"){
+     TransferStore.setState(app,id,"Подготовка")
+     start(app,id)
+    }
+   }
+  }
+ }
  private fun online(c:Context):Boolean=try{val cm=c.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager;val n=cm.activeNetwork;n!=null&&cm.getNetworkCapabilities(n)?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)==true}catch(_:Exception){false}
  private fun awaitNetwork(c:Context,id:String):Boolean{val began=SystemClock.elapsedRealtime();while(SystemClock.elapsedRealtime()-began<10*60*1000L){if(isStopped(c,id))return false;if(online(c))return true;TransferStore.setState(c,id,"Ожидание сети");Thread.sleep(1000)};return false}
  private fun readMeta(file:File)=try{JSONObject(file.readText())}catch(_:Exception){JSONObject()}
