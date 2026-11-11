@@ -213,15 +213,18 @@ object HlsDownloader {
    started=true
    val buffer=ByteBuffer.allocateDirect(maxInputSize)
    val info=MediaCodec.BufferInfo()
+   // Separate AAC and MPEG-TS sources can have unrelated timestamp epochs.
+   // Normalize each source before interleaving to avoid minutes of apparent silence.
    val starts=extractors.map{ex->ex.sampleTime.takeIf{it>=0}?:0L}
-   val firstUs=starts.filter{it>0L}.minOrNull()?:0L
    var count=0L
    while(true){
     if(isStopped(context,id))throw InterruptedIOException("Сборка MP4 остановлена")
     val candidate=extractors.indices.filter{i->
      val ex=extractors[i]
      ex.sampleTrackIndex>=0 && maps[i].containsKey(ex.sampleTrackIndex)
-    }.minByOrNull{i->extractors[i].sampleTime.takeIf{it>=0}?:Long.MAX_VALUE}?:break
+    }.minByOrNull{i->
+     (extractors[i].sampleTime-starts[i]).coerceAtLeast(0L)
+    }?:break
     val ex=extractors[candidate]
     val track=maps[candidate][ex.sampleTrackIndex] ?: error("Дорожка пропала")
     buffer.clear()
@@ -229,7 +232,7 @@ object HlsDownloader {
     if(bytes<0){ex.advance();continue}
     info.offset=0
     info.size=bytes
-    info.presentationTimeUs=(ex.sampleTime-firstUs).coerceAtLeast(0L)
+    info.presentationTimeUs=(ex.sampleTime-starts[candidate]).coerceAtLeast(0L)
     info.flags=ex.sampleFlags
     writer.writeSampleData(track,buffer,info)
     count++
