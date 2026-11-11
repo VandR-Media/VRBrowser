@@ -11,6 +11,9 @@ on:
       - 'settings.gradle.kts'
       - 'gradle.properties'
       - '.github/workflows/android.yml'
+concurrency:
+  group: vrbrowser-release-${{ github.ref }}
+  cancel-in-progress: true
 permissions:
   contents: read
 jobs:
