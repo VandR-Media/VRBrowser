@@ -88,8 +88,8 @@ class PlayerActivity : Activity() {
 
  override fun onCreate(savedInstanceState:Bundle?) {
   super.onCreate(savedInstanceState)
-  window.statusBarColor=backgroundColorColor
-  window.navigationBarColor=backgroundColorColor
+  window.statusBarColor=backgroundColor
+  window.navigationBarColor=backgroundColor
   window.decorView.keepScreenOn=true
 
   val url=intent.getStringExtra("url") ?: run { finish(); return }
