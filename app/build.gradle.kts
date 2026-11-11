@@ -26,5 +26,5 @@ dependencies {
  implementation("androidx.media3:media3-ui:1.5.1")
  implementation("androidx.media3:media3-transformer:1.5.1")
  implementation("androidx.lifecycle:lifecycle-livedata-ktx:2.8.7")
- implementation("com.github.Edsuns.AdblockAndroid:ad-filter:master-SNAPSHOT")
+ implementation("com.github.Edsuns.AdblockAndroid:ad-filter:a585487eb19328f635a5b7b983fa38d4c97f2bc8")
 }
