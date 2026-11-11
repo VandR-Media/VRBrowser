@@ -34,7 +34,7 @@ class MainActivity : Activity() {
  private var pendingDownload: Triple<String,String,String>? = null
  private val knownQualities=mutableMapOf<String,String>()
  private val shield by lazy { Shield(this) }
- private val adFilter by lazy { AdFilter.get(this) }
+ private val adFilter by lazy { AdFilter.get() }
  private val prefs by lazy { getSharedPreferences("browser", MODE_PRIVATE) }
  private val bookmarks get() = readList("bookmarks")
  private val history get() = readList("history")
