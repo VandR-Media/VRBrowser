@@ -72,8 +72,31 @@ object HlsDownloader {
    finally{connections.remove(id,conn);conn.disconnect()}
   };throw last?:IOException("Не удалось получить HLS-плейлист")
  }
+ private fun probeVariantHeight(c:Context,id:String,entry:TransferStore.Entry,url:URL):Int? {
+  val temp=File.createTempFile("vr_hls_probe_",".ts",c.cacheDir)
+  return try{
+   val body=playlist(c,id,url,entry)
+   if(body.contains("#EXT-X-STREAM-INF"))return null
+   val first=body.lines().firstOrNull{it.isNotBlank()&&!it.startsWith("#")}?:return null
+   val conn=connect(c,id,URL(url,first),entry)
+   try{
+    if(conn.responseCode!=200)return null
+    conn.inputStream.use{input->temp.outputStream().use{output->
+     val buffer=ByteArray(32768);var total=0
+     while(total<10*1024*1024){
+      val n=input.read(buffer,0,minOf(buffer.size,10*1024*1024-total))
+      if(n<0)break
+      output.write(buffer,0,n)
+      total+=n
+     }
+    }}
+   }finally{connections.remove(id,conn);conn.disconnect()}
+   videoHeight(temp)
+  }catch(_:Exception){null}
+  finally{temp.delete()}
+ }
  private data class Variant(val url:URL,val height:Int?,val name:String?,val bandwidth:Long,val audioUrl:URL?)
- private fun selectVariant(body:String,base:URL,quality:String?,audioLanguage:String?):Variant {
+ private fun selectVariant(c:Context,id:String,entry:TransferStore.Entry,body:String,base:URL,quality:String?,audioLanguage:String?):Variant {
   val lines=body.lines()
   val audioTracks=lines.filter{it.trim().startsWith("#EXT-X-MEDIA:") && it.contains("TYPE=AUDIO")}
   fun attrs(tag:String):Map<String,String> =
@@ -102,9 +125,13 @@ object HlsDownloader {
   val matches=if(wanted==null)emptyList() else variants.filter {
    it.height==wanted || qualityHeight(it.name)==wanted
   }
+  val physicalMatches=if(wanted!=null && matches.size!=1)variants.filter{candidate->
+   probeVariantHeight(c,id,entry,candidate.url)==wanted
+  }else emptyList()
   val only=variants.singleOrNull()
   val selected=when {
    matches.size==1 -> matches.single()
+   physicalMatches.size==1 -> physicalMatches.single()
    only!=null && wanted==null -> only
    only!=null && only.height==null && qualityHeight(only.name)==null -> only
    else -> throw IOException(
@@ -308,7 +335,7 @@ object HlsDownloader {
    var audioUrl=initial.audioSource.takeIf{it.isNotBlank()}?.let{URL(it)}
    while(body.contains("#EXT-X-STREAM-INF")){
     check(depth++<4){"Слишком глубокий HLS master-плейлист"}
-    val variant=selectVariant(body,url,initial.quality,initial.audioLanguage)
+    val variant=selectVariant(c,id,initial,body,url,initial.quality,initial.audioLanguage)
     if(audioUrl==null)audioUrl=variant.audioUrl
     url=variant.url
     body=playlist(c,id,url,initial)
