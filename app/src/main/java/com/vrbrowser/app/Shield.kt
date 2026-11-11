@@ -9,93 +9,117 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.util.concurrent.Executors
 
-/** Conservative host-level blocker; not a full Adblock syntax engine. */
+/**
+ * Host-based network guard. Supplements the syntax-aware AdFilter engine;
+ * it cannot filter cosmetic elements or first-party ads that share the page's host.
+ */
 class Shield(context: Context) {
     private val prefs = context.applicationContext.getSharedPreferences("shield", Context.MODE_PRIVATE)
-    private val executor = Executors.newSingleThreadExecutor()
+    private val worker = Executors.newSingleThreadExecutor()
+    data class Source(val id:String, val name:String, val url:String)
+    val sources = listOf(
+        Source("stevenblack", "StevenBlack Unified Hosts", "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts"),
+        Source("adaway", "AdAway hosts", "https://adaway.org/hosts.txt")
+    )
     private val builtin = setOf(
         "doubleclick.net", "googlesyndication.com", "googleadservices.com",
         "adnxs.com", "taboola.com", "outbrain.com", "scorecardresearch.com", "criteo.com"
     )
-    @Volatile private var remote: Set<String> = load()
+    @Volatile private var remote: Set<String> = loadAll()
 
-    fun mode(): Int = prefs.getInt("mode", 1)
-    fun setMode(value: Int) { prefs.edit().putInt("mode", value.coerceIn(0, 2)).apply() }
-    fun exclusions(): String = prefs.getString("exceptions", "") ?: ""
-    fun setExclusions(value: String) { prefs.edit().putString("exceptions", value).apply() }
-
-    private fun hostMatches(host: String, domain: String) = host == domain || host.endsWith(".$domain")
-
-    fun shouldBlock(uri: Uri, mainFrame: Boolean): Boolean {
-        if (mainFrame || mode() == 0 || uri.scheme !in listOf("https", "http")) return false
-        val host = uri.host?.lowercase()?.trimEnd('.') ?: return false
-        if (exclusions().split(',', '\n').map { it.trim().lowercase() }
-                .any { it.isNotEmpty() && hostMatches(host, it) }) return false
-        return (builtin + remote).any { hostMatches(host, it) }
+    fun mode() = prefs.getInt("mode",1)
+    fun setMode(value:Int) { prefs.edit().putInt("mode",value.coerceIn(0,2)).apply() }
+    fun exclusions():String = prefs.getString("exceptions","") ?: ""
+    fun setExclusions(value:String) { prefs.edit().putString("exceptions",value.take(4096)).apply() }
+    fun sourceEnabled(id:String) = prefs.getBoolean("enabled_$id",true)
+    fun setSourceEnabled(id:String, enabled:Boolean) {
+        if(sources.none { it.id==id })return
+        prefs.edit().putBoolean("enabled_$id",enabled).apply()
+        remote = loadAll()
     }
-
-    private fun load(): Set<String> = (prefs.getString("domains", "") ?: "")
-        .lineSequence().filter { it.isNotBlank() }.toSet()
+    fun lastUpdated(id:String) = prefs.getLong("updated_$id",0L)
+    fun ruleCount():Int = builtin.size+remote.size
+    private fun match(host:String,domain:String) = host==domain || host.endsWith(".$domain")
+    private fun canonicalDomain(input:String):String? {
+        val host=input.trim().lowercase().trimEnd('.')
+        if(host.length !in 4..253 || host.startsWith('.') || ".." in host || '.' !in host)return null
+        if(!host.matches(Regex("[a-z0-9.-]+")))return null
+        if(host.split('.').any{ it.isEmpty() || it.length>63 || it.startsWith('-') || it.endsWith('-') })return null
+        return host
+    }
+    fun shouldBlock(uri:Uri,mainFrame:Boolean):Boolean {
+        if(mainFrame || mode()==0 || uri.scheme !in listOf("http","https"))return false
+        val host=uri.host?.lowercase()?.trimEnd('.') ?:return false
+        // Exceptions apply to the resource host. Site-level allowlisting is separate.
+        if(exclusions().split(',', '\n').mapNotNull(::canonicalDomain).any{ match(host,it) })return false
+        // Domain lookup is bounded by the number of host components, not list size.
+        var candidate=host
+        while(true) {
+            if(candidate in builtin || candidate in remote)return true
+            val dot=candidate.indexOf('.')
+            if(dot<0)return false
+            candidate=candidate.substring(dot+1)
+        }
+    }
+    private fun key(id:String)="domains_$id"
+    private fun parse(text:String):Set<String> {
+        val result=LinkedHashSet<String>()
+        text.lineSequence().forEach { raw ->
+            val line=raw.substringBefore('#').trim()
+            if(line.isEmpty())return@forEach
+            val parts=line.split(Regex("\\s+"))
+            if(parts.size<2 || parts[0] !in setOf("0.0.0.0","127.0.0.1"))return@forEach
+            parts.drop(1).mapNotNull(::canonicalDomain).filterNot{
+                it=="localhost" || it.endsWith(".localhost") || it=="localdomain"
+            }.forEach(result::add)
+        }
+        return result
+    }
+    private fun loadAll():Set<String> = sources.asSequence().filter{sourceEnabled(it.id)}
+        .flatMap { (prefs.getString(key(it.id),"") ?: "").lineSequence() }
+        .mapNotNull(::canonicalDomain).toSet()
 
     fun updateIfDue() {
-        if (System.currentTimeMillis() - prefs.getLong("updated", 0L) > 7L * 24 * 60 * 60 * 1000) {
+        if(sources.any { sourceEnabled(it.id) && System.currentTimeMillis()-lastUpdated(it.id)>7L*86400000L })
             updateNow(null)
-        }
     }
-
-    private fun readLimited(connection: HttpURLConnection, limit: Int): ByteArray {
-        return connection.inputStream.use { input ->
-            val output = ByteArrayOutputStream()
-            val buffer = ByteArray(8192)
-            var total = 0
-            while (true) {
-                val count = input.read(buffer)
-                if (count < 0) break
-                if (count == 0) continue
-                total += count
-                if (total > limit) error("Список превышает лимит 5 МБ")
-                output.write(buffer, 0, count)
-            }
-            output.toByteArray()
-        }
-    }
-
-    fun updateNow(callback: ((String) -> Unit)?) {
-        executor.execute {
-            val result = try {
-                val connection = URL("https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts")
-                    .openConnection() as HttpURLConnection
-                connection.connectTimeout = 12000
-                connection.readTimeout = 15000
-                connection.instanceFollowRedirects = false
+    fun updateNow(callback:((String)->Unit)?) {
+        worker.execute {
+            val notes=ArrayList<String>()
+            for(source in sources.filter{sourceEnabled(it.id)}) {
+                if(source.url.startsWith("https://").not())continue
                 try {
-                    if (connection.responseCode != HttpURLConnection.HTTP_OK) {
-                        error("HTTP ${connection.responseCode}")
-                    }
-                    val bytes = readLimited(connection, 5_000_000)
-                    val domainPattern = Regex("[a-z0-9.-]{3,253}")
-                    val domains = bytes.toString(Charsets.UTF_8).lineSequence().mapNotNull { line ->
-                        val parts = line.substringBefore('#').trim().split(Regex("\\s+"))
-                        if (parts.size >= 2 && parts[0] in setOf("0.0.0.0", "127.0.0.1")) {
-                            parts[1].lowercase().takeIf {
-                                '.' in it && domainPattern.matches(it) && !it.startsWith('.') && !it.endsWith('.')
+                    val conn=URL(source.url).openConnection() as HttpURLConnection
+                    conn.connectTimeout=12000
+                    conn.readTimeout=20000
+                    conn.instanceFollowRedirects=false
+                    try {
+                        if(conn.responseCode!=200)error("HTTP ${conn.responseCode}")
+                        val output=ByteArrayOutputStream()
+                        conn.inputStream.use { input ->
+                            val buffer=ByteArray(8192)
+                            var size=0
+                            while(true) {
+                                val n=input.read(buffer)
+                                if(n<0)break
+                                size+=n
+                                if(size>8_000_000)error("Источник превышает 8 МБ")
+                                output.write(buffer,0,n)
                             }
-                        } else null
-                    }.toSet()
-                    if (domains.size < 1000) error("Список выглядит неполным")
-                    remote = domains
-                    prefs.edit().putString("domains", domains.joinToString("\n"))
-                        .putLong("updated", System.currentTimeMillis()).apply()
-                    "Обновлено: ${domains.size} доменов"
-                } finally {
-                    connection.disconnect()
+                        }
+                        val domains=parse(output.toString("UTF-8"))
+                        if(domains.size<500)error("Недостаточно правил: ${domains.size}")
+                        prefs.edit().putString(key(source.id),domains.joinToString("\n"))
+                            .putLong("updated_${source.id}",System.currentTimeMillis()).apply()
+                        notes.add("${source.name}: ${domains.size} доменов")
+                    } finally { conn.disconnect() }
+                } catch(e:Exception) {
+                    notes.add("${source.name}: ${e.message ?: "сбой обновления"}")
                 }
-            } catch (e: Exception) {
-                "Не удалось обновить: ${e.message ?: e.javaClass.simpleName}"
-            } catch (e: LinkageError) {
-                "Ошибка совместимости: ${e.message ?: e.javaClass.simpleName}"
             }
-            if (callback != null) Handler(Looper.getMainLooper()).post { callback(result) }
+            remote=loadAll()
+            val message=(notes+ "Активных уникальных правил: ${ruleCount()}").joinToString("\n")
+            if(callback!=null)Handler(Looper.getMainLooper()).post{callback(message)}
         }
     }
 }
