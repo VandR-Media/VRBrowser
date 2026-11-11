@@ -52,7 +52,14 @@ class Shield(context: Context) {
         val host=uri.host?.lowercase()?.trimEnd('.') ?:return false
         // Exceptions apply to the resource host. Site-level allowlisting is separate.
         if(exclusions().split(',', '\n').mapNotNull(::canonicalDomain).any{ match(host,it) })return false
-        return (builtin+remote).any{match(host,it)}
+        // Domain lookup is bounded by the number of host components, not list size.
+        var candidate=host
+        while(true) {
+            if(candidate in builtin || candidate in remote)return true
+            val dot=candidate.indexOf('.')
+            if(dot<0)return false
+            candidate=candidate.substring(dot+1)
+        }
     }
     private fun key(id:String)="domains_$id"
     private fun parse(text:String):Set<String> {
