@@ -61,11 +61,12 @@ class InlinePlayerController(
     const r=node.getBoundingClientRect();
     if(r.width<200 || r.height<100)return '';
     window.__vrInlineTarget=node;
-    node.dataset.vrOldVisibility=node.style.visibility||'';
+    if(node.dataset.vrOldVisibility===undefined)
+     node.dataset.vrOldVisibility=node.style.visibility||'';
     node.style.visibility='hidden';
     if(node.tagName==='IFRAME'){
-     node.dataset.vrOldSrc=node.getAttribute('src')||'';
-     node.setAttribute('src','about:blank');
+     if(!node.dataset.vrOldSrc)node.dataset.vrOldSrc=node.getAttribute('src')||'';
+     if(node.getAttribute('src')!=='about:blank')node.setAttribute('src','about:blank');
     } else if(node.tagName==='VIDEO') {
      try{node.pause();}catch(e){}
     }
