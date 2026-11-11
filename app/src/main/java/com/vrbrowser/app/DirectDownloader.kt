@@ -22,7 +22,7 @@ object DirectDownloader {
  private val paused=ConcurrentHashMap.newKeySet<String>()
  private val restartRequested=ConcurrentHashMap.newKeySet<String>()
  private val connections=ConcurrentHashMap<String,HttpURLConnection>()
- private class HttpStatusException(val status:Int):IOException("HTTP §{status}")
+ private class HttpStatusException(val status:Int):IOException("HTTP ${status}")
  private fun state(c:Context,id:String)=TransferStore.state(c,id).orEmpty()
  private fun isPaused(c:Context,id:String)=paused.contains(id)||state(c,id)=="Пауза"
  private fun isDeleted(c:Context,id:String)=state(c,id)=="Удалено"
@@ -30,7 +30,7 @@ object DirectDownloader {
  fun onNetworkLost(){connections.values.forEach{try{it.disconnect()}catch(_:Exception){}}}
  fun pause(c:Context,id:String){paused.add(id);TransferStore.setState(c,id,"Пауза");connections.remove(id)?.disconnect()}
  fun delete(c:Context,id:String){paused.add(id);TransferStore.setState(c,id,"Удалено");connections.remove(id)?.disconnect();if(!active.contains(id))cleanup(c,id)}
- private fun cleanup(c:Context,id:String){val item=TransferStore.entries(c).firstOrNull{it.id==id};File(c.filesDir,"direct_§{id}.part").delete();File(c.filesDir,"direct_§{id}.meta").delete();try{item?.uri?.takeIf{it.isNotBlank()}?.let{c.contentResolver.delete(Uri.parse(it),null,null)}}catch(_:Exception){};TransferStore.remove(c,id)}
+ private fun cleanup(c:Context,id:String){val item=TransferStore.entries(c).firstOrNull{it.id==id};File(c.filesDir,"direct_${id}.part").delete();File(c.filesDir,"direct_${id}.meta").delete();try{item?.uri?.takeIf{it.isNotBlank()}?.let{c.contentResolver.delete(Uri.parse(it),null,null)}}catch(_:Exception){};TransferStore.remove(c,id)}
  fun start(context:Context,id:String){paused.remove(id);if(!active.add(id)){restartRequested.add(id);return};pool.execute{try{run(context.applicationContext,id)}finally{active.remove(id);if(restartRequested.remove(id)&&TransferStore.state(context,id)=="Подготовка")start(context,id)}}}
  private fun online(c:Context):Boolean=try{val cm=c.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager;val n=cm.activeNetwork;n!=null&&cm.getNetworkCapabilities(n)?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)==true}catch(_:Exception){false}
  private fun awaitNetwork(c:Context,id:String):Boolean{val began=SystemClock.elapsedRealtime();while(SystemClock.elapsedRealtime()-began<10*60*1000L){if(isStopped(c,id))return false;if(online(c))return true;TransferStore.setState(c,id,"Ожидание сети");Thread.sleep(1000)};return false}
@@ -38,14 +38,14 @@ object DirectDownloader {
  private fun connect(c:Context,id:String,entry:TransferStore.Entry,offset:Long,meta:JSONObject):HttpURLConnection{
   val conn=(URL(entry.source).openConnection() as HttpURLConnection).apply{
    connectTimeout=15000;readTimeout=25000;instanceFollowRedirects=true;setRequestProperty("User-Agent",entry.userAgent.takeIf{it.isNotBlank()}?:WebSettings.getDefaultUserAgent(c));setRequestProperty("Accept","*/*");setRequestProperty("Accept-Encoding","identity")
-   if(entry.referer.startsWith("http")){setRequestProperty("Referer",entry.referer);try{val ref=Uri.parse(entry.referer);if(ref.scheme in listOf("http","https")&&!ref.authority.isNullOrBlank())setRequestProperty("Origin","§{ref.scheme}://§{ref.authority}")}catch(_:Exception){}}
+   if(entry.referer.startsWith("http")){setRequestProperty("Referer",entry.referer);try{val ref=Uri.parse(entry.referer);if(ref.scheme in listOf("http","https")&&!ref.authority.isNullOrBlank())setRequestProperty("Origin","${ref.scheme}://${ref.authority}")}catch(_:Exception){}}
    try{CookieManager.getInstance().getCookie(entry.source)?.takeIf{it.isNotBlank()}?.let{setRequestProperty("Cookie",it)}}catch(_:Exception){}
-   if(offset>0){setRequestProperty("Range","bytes=§{offset}-");meta.optString("etag").takeIf{it.isNotBlank()}?.let{setRequestProperty("If-Range",it)}?:meta.optString("lastModified").takeIf{it.isNotBlank()}?.let{setRequestProperty("If-Range",it)}}
+   if(offset>0){setRequestProperty("Range","bytes=${offset}-");meta.optString("etag").takeIf{it.isNotBlank()}?.let{setRequestProperty("If-Range",it)}?:meta.optString("lastModified").takeIf{it.isNotBlank()}?.let{setRequestProperty("If-Range",it)}}
   };connections[id]=conn;return conn
  }
  private fun run(c:Context,id:String){
   val entry=TransferStore.entries(c).firstOrNull{it.id==id}?:return;if(entry.source.isBlank()||entry.uri.isBlank())return
-  val part=File(c.filesDir,"direct_§{id}.part");val metaFile=File(c.filesDir,"direct_§{id}.meta");var progress=entry.progress.coerceIn(0,99);var completed=false
+  val part=File(c.filesDir,"direct_${id}.part");val metaFile=File(c.filesDir,"direct_${id}.meta");var progress=entry.progress.coerceIn(0,99);var completed=false
   try{
    for(attempt in 1..6){
     if(isDeleted(c,id)){cleanup(c,id);return};if(isPaused(c,id)){TransferStore.setState(c,id,"Пауза");return};if(!awaitNetwork(c,id)){TransferStore.setState(c,id,"Ожидание сети");return}
@@ -83,7 +83,9 @@ object DirectDownloader {
    TransferStore.updateIfActive(c,id,entry.name,"Готово",100,bytes,entry.uri,0,-1,entry.source,entry.referer,entry.userAgent,entry.quality);part.delete();metaFile.delete()
   }catch(e:Exception){
    if(isDeleted(c,id)){cleanup(c,id);return};if(isPaused(c,id)){TransferStore.setState(c,id,"Пауза");return};if(restartRequested.contains(id))return
-   val status=(e as? HttpStatusException)?.status;val message=when(status){401,403->"Ссылка устарела · HTTP §{status}";else->if(e.message=="Ожидание сети")"Ожидание сети" else "Ошибка: §{e.message?:"сеть"}"}
+   val status=(e as? HttpStatusException)?.status
+   val reason=e.message ?: "сеть"
+   val message=when(status){401,403->"Ссылка устарела · HTTP ${status}";else->if(e.message=="Ожидание сети")"Ожидание сети" else "Ошибка: ${reason}"}
    TransferStore.updateIfActive(c,id,entry.name,message,progress,part.length(),entry.uri,0,-1,entry.source,entry.referer,entry.userAgent,entry.quality)
   }
  }
