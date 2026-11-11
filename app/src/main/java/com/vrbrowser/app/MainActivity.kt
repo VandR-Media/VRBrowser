@@ -72,14 +72,14 @@ class MainActivity : Activity() {
   val bottom=row().apply { setPadding(dp(5),dp(5),dp(5),dp(8)); gravity=Gravity.CENTER_VERTICAL }
   root.addView(bottom)
   listOf("‹","›","+","▣","★","♫","⋮").forEachIndexed { i,s ->
-   val action: () -> Unit = when(i) { 0->{ { active().takeIf{it.canGoBack()}?.goBack() } }; 1->{ { active().takeIf{it.canGoForward()}?.goForward() } }; 2->{ { addTab(intent.getStringExtra("open_url")?.takeIf { it.startsWith("https://") || it.startsWith("http://") } ?: "https://www.google.com") } }; 3->{ { showTabs() } }; 4->{ { showBookmarks() } }; 5->{ { showMedia() } }; else->{ { showMenu() } } }
+   val action: () -> Unit = when(i) { 0->{ { active().takeIf{it.canGoBack()}?.goBack() } }; 1->{ { active().takeIf{it.canGoForward()}?.goForward() } }; 2->{ { addTab("https://www.google.com") } }; 3->{ { showTabs() } }; 4->{ { showBookmarks() } }; 5->{ { showMedia() } }; else->{ { showMenu() } } }
    val descriptions = listOf("Назад", "Вперёд", "Новая вкладка", "Вкладки", "Закладки", "Медиа", "Меню")
    val lp=LinearLayout.LayoutParams(0,dp(46),1f).apply { setMargins(dp(2),0,dp(2),0) }
    bottom.addView(navButton(s, descriptions[i], action),lp)
   }
   // A failed WebView initialization should not terminate the entire app.
   try {
-   addTab("https://www.google.com")
+   addTab(intent.getStringExtra("open_url")?.takeIf { it.startsWith("https://") || it.startsWith("http://") } ?: "https://www.google.com")
   } catch (error: Throwable) {
    getSharedPreferences("diagnostics", MODE_PRIVATE).edit()
     .putString("last_crash", android.util.Log.getStackTraceString(error).take(18000)).apply()
@@ -338,6 +338,7 @@ class MainActivity : Activity() {
   val title=(active().title ?: "VRBrowser").replace(Regex("[^\\p{L}\\p{N}._ -]"),"_").trim().take(65).ifBlank{"VRBrowser"}
   val res=quality?.takeIf{Regex("[0-9]{3,4}p").matches(it)}?.let{"_${it}"} ?: ""
   val name="${title}${res}.$ext"
+  if(quality!=null)knownQualities[url]=quality
   pendingDownload=Triple(url,active().url.orEmpty(),name)
   // ACTION_CREATE_DOCUMENT lets the user select the location and name without storage permissions.
   try {
@@ -360,7 +361,10 @@ class MainActivity : Activity() {
    .setPositiveButton("Скачать") { _,_->
     try {
      val id=System.currentTimeMillis().toString()
-     TransferStore.update(this,id,name,"Подготовка",0,0,target.toString(),source=url,referer=referer)
+     val grantFlags=(data?.flags?:0) and (Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+     try { if(grantFlags!=0)contentResolver.takePersistableUriPermission(target,grantFlags) } catch (_:Exception) { }
+     val ua=active().settings.userAgentString
+     TransferStore.update(this,id,name,"Подготовка",0,0,target.toString(),source=url,referer=referer,userAgent=ua,quality=knownQualities[url])
      if(url.contains(".m3u8",true)) HlsDownloader.start(this,id)
      else {
       // Non-HLS direct files are downloaded to the selected document in the same resumable task framework.
