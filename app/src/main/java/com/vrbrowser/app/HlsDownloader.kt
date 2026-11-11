@@ -72,9 +72,14 @@ object HlsDownloader {
    finally{connections.remove(id,conn);conn.disconnect()}
   };throw last?:IOException("Не удалось получить HLS-плейлист")
  }
- private data class Variant(val url:URL,val height:Int?,val name:String?,val bandwidth:Long)
- private fun selectVariant(body:String,base:URL,quality:String?):URL {
+ private data class Variant(val url:URL,val height:Int?,val name:String?,val bandwidth:Long,val audioUrl:URL?)
+ private fun selectVariant(body:String,base:URL,quality:String?,audioLanguage:String?):Variant {
   val lines=body.lines()
+  val audioTracks=lines.filter{it.trim().startsWith("#EXT-X-MEDIA:") && it.contains("TYPE=AUDIO")}
+  fun attrs(tag:String):Map<String,String> =
+   Regex("""([A-Z][A-Z0-9-]*)=("[^"]*"|[^,]+)""").findAll(tag).associate {
+    it.groupValues[1] to it.groupValues[2].trim('"')
+   }
   val variants=mutableListOf<Variant>()
   for(i in lines.indices) {
    val line=lines[i].trim()
@@ -83,7 +88,14 @@ object HlsDownloader {
    val height=Regex("""RESOLUTION=\d+x(\d+)""").find(line)?.groupValues?.get(1)?.toIntOrNull()
    val name=Regex("NAME=\"([^\"]+)\"").find(line)?.groupValues?.get(1)
    val bitrate=Regex("""(?:AVERAGE-BANDWIDTH|BANDWIDTH)=(\d+)""").find(line)?.groupValues?.get(1)?.toLongOrNull()?:0L
-   variants.add(Variant(URL(base,child.trim()),height,name,bitrate))
+   val info=attrs(line)
+   val group=info["AUDIO"]
+   val candidates=audioTracks.map{attrs(it)}.filter{it["GROUP-ID"]==group && !it["URI"].isNullOrBlank()}
+   val selectedAudio=candidates.firstOrNull{it["LANGUAGE"]==audioLanguage}
+    ?:candidates.firstOrNull{it["DEFAULT"]?.equals("YES",true)==true}
+    ?:candidates.firstOrNull()
+   val audioUrl=selectedAudio?.get("URI")?.let{URL(base,it)}
+   variants.add(Variant(URL(base,child.trim()),height,name,bitrate,audioUrl))
   }
   check(variants.isNotEmpty()){"В master-плейлисте не найдены варианты качества"}
   val wanted=Regex("""(?i)(\d{3,4})p?""").find(quality.orEmpty())?.groupValues?.get(1)?.toIntOrNull()
@@ -100,7 +112,7 @@ object HlsDownloader {
     else "Во вложенном HLS-плейлисте несколько вариантов, но выбранное качество не определено. Выбери качество в списке медиа заново."
    )
   }
-  return selected.url
+  return selected
  }
  private fun qualityHeight(value:String?):Int? =
   Regex("""(?i)(\d{3,4})p?""").find(value.orEmpty())?.groupValues?.get(1)?.toIntOrNull()
@@ -128,79 +140,178 @@ object HlsDownloader {
   * re-encoding. This avoids the large encoder buffers and device-dependent
   * transcode failures that previously happened near 99% on phones.
   */
- private fun remuxToMp4(context:Context,id:String,input:File,output:File) {
+ private fun remuxToMp4(context:Context,id:String,input:File,output:File,audioInput:File?) {
+  // Android MediaExtractor reads TS with potentially separate HLS audio renditions.
+  // We MUST mux both tracks: a video-only MP4 is not a successful download.
   output.delete()
-  val extractor=MediaExtractor()
+  val extractors=mutableListOf<MediaExtractor>()
   var muxer:MediaMuxer?=null
-  var muxerStarted=false
+  var started=false
   try {
-   extractor.setDataSource(input.absolutePath)
-   muxer=MediaMuxer(output.absolutePath,MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
-   val trackMap=mutableMapOf<Int,Int>()
-   var videoTracks=0
-   var maxInputSize=4*1024*1024
-   for(i in 0 until extractor.trackCount) {
-    val format=extractor.getTrackFormat(i)
-    val mime=format.getString(MediaFormat.KEY_MIME).orEmpty()
-    if(!mime.startsWith("video/") && !mime.startsWith("audio/"))continue
-    if(mime !in setOf("video/avc","video/hevc","audio/mp4a-latm")) {
-     throw IOException("MP4 без перекодирования не поддерживает дорожку $mime")
-    }
-    if(mime.startsWith("video/"))videoTracks++
-    if(format.containsKey(MediaFormat.KEY_MAX_INPUT_SIZE)) {
-     maxInputSize=maxOf(maxInputSize,format.getInteger(MediaFormat.KEY_MAX_INPUT_SIZE).coerceAtLeast(0))
-    }
-    trackMap[i]=muxer.addTrack(format)
-    // MediaExtractor exposes no samples until its tracks are explicitly selected.
-    extractor.selectTrack(i)
+   val inputs=listOfNotNull(input,audioInput)
+   inputs.forEach{path->
+    extractors.add(MediaExtractor().apply{setDataSource(path.absolutePath)})
    }
-   check(videoTracks>0){"В TS-файле не найдена совместимая видеодорожка"}
-   check(trackMap.isNotEmpty()){"В TS-файле нет дорожек для MP4"}
+   muxer=MediaMuxer(output.absolutePath,MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+   val maps=extractors.map{mutableMapOf<Int,Int>()}
+   var videoCount=0
+   var audioCount=0
+   var maxInputSize=4*1024*1024
+   extractors.forEachIndexed{sourceIndex,extractor->
+    for(track in 0 until extractor.trackCount){
+     val format=extractor.getTrackFormat(track)
+     val mime=format.getString(MediaFormat.KEY_MIME).orEmpty()
+     val video=mime.startsWith("video/")
+     val audio=mime.startsWith("audio/")
+     if(!video && !audio)continue
+     if(sourceIndex==0 && audioInput!=null && audio)continue // prefer selected HLS audio rendition
+     if(sourceIndex==1 && video)continue
+     if(mime !in setOf("video/avc","video/hevc","audio/mp4a-latm")) {
+      throw IOException("Дорожка $mime не поддерживается MP4 без перекодирования")
+     }
+     if(video)videoCount++
+     if(audio)audioCount++
+     if(format.containsKey(MediaFormat.KEY_MAX_INPUT_SIZE)){
+      maxInputSize=maxOf(maxInputSize,format.getInteger(MediaFormat.KEY_MAX_INPUT_SIZE).coerceAtLeast(0))
+     }
+     maps[sourceIndex][track]=muxer.addTrack(format)
+     extractor.selectTrack(track)
+    }
+   }
+   check(videoCount>0){"Не найдена видеодорожка HLS"}
+   check(audioCount>0){"Не найдена аудиодорожка. Сохранение немого MP4 запрещено: нужен аудиоплейлист HLS."}
    maxInputSize=maxInputSize.coerceIn(1024*1024,16*1024*1024)
    muxer.start()
-   muxerStarted=true
+   started=true
    val buffer=ByteBuffer.allocateDirect(maxInputSize)
    val info=MediaCodec.BufferInfo()
-   var wroteSamples=false
-   while(true) {
+   val starts=extractors.map{ex->ex.sampleTime.takeIf{it>=0}?:0L}
+   val firstUs=starts.filter{it>0L}.minOrNull()?:0L
+   var count=0L
+   while(true){
     if(isStopped(context,id))throw InterruptedIOException("Сборка MP4 остановлена")
-    val sourceTrack=extractor.sampleTrackIndex
-    if(sourceTrack<0)break
-    val targetTrack=trackMap[sourceTrack]
-    if(targetTrack!=null) {
-     buffer.clear()
-     val size=extractor.readSampleData(buffer,0)
-     if(size<0)break
-     info.offset=0
-     info.size=size
-     info.presentationTimeUs=extractor.sampleTime
-     info.flags=extractor.sampleFlags
-     muxer.writeSampleData(targetTrack,buffer,info)
-     wroteSamples=true
+    val candidate=extractors.indices.filter{i->
+     val ex=extractors[i]
+     ex.sampleTrackIndex>=0 && maps[i].containsKey(ex.sampleTrackIndex)
+    }.minByOrNull{i->extractors[i].sampleTime.takeIf{it>=0}?:Long.MAX_VALUE}?:break
+    val ex=extractors[candidate]
+    val track=maps[candidate][ex.sampleTrackIndex] ?: error("Дорожка пропала")
+    buffer.clear()
+    val bytes=ex.readSampleData(buffer,0)
+    if(bytes<0){ex.advance();continue}
+    info.offset=0
+    info.size=bytes
+    info.presentationTimeUs=(ex.sampleTime-firstUs).coerceAtLeast(0L)
+    info.flags=ex.sampleFlags
+    muxer.writeSampleData(track,buffer,info)
+    count++
+    if(!ex.advance()) {
+     // The next loop will continue with the remaining extractor, if any.
     }
-    extractor.advance()
    }
-   check(wroteSamples){"В TS-файле нет медиасэмплов для MP4"}
+   check(count>0){"Не удалось прочитать медиасэмплы"}
    muxer.stop()
-   muxerStarted=false
-   check(output.isFile && output.length()>0L){"После сборки MP4-файл пуст"}
-  } catch(error:Exception) {
+   started=false
+   check(output.isFile && output.length()>0L){"MP4-файл пуст"}
+   // Reopen the result to catch missing audio/video before user sees 'Готово'.
+   val checkExtractor=MediaExtractor()
+   try{
+    checkExtractor.setDataSource(output.absolutePath)
+    val mimes=(0 until checkExtractor.trackCount).map{
+     checkExtractor.getTrackFormat(it).getString(MediaFormat.KEY_MIME).orEmpty()
+    }
+    check(mimes.any{it.startsWith("video/")} && mimes.any{it.startsWith("audio/")}){
+     "В итоговом MP4 отсутствует видео или звук"
+    }
+   }finally{checkExtractor.release()}
+  }catch(error:Exception){
    output.delete()
    throw error
-  } finally {
-   if(muxerStarted)try{muxer?.stop()}catch(_:Exception){}
+  }finally{
+   if(started)try{muxer?.stop()}catch(_:Exception){}
    try{muxer?.release()}catch(_:Exception){}
-   try{extractor.release()}catch(_:Exception){}
+   extractors.forEach{try{it.release()}catch(_:Exception){}}
   }
  }
  private fun isTransportStream(file:File):Boolean{val sample=ByteArray(600);val count=try{file.inputStream().use{input->var n=0;while(n<sample.size){val r=input.read(sample,n,sample.size-n);if(r<=0)break;n+=r};n}}catch(_:Exception){0};if(count<188)return false;for(offset in 0..minOf(32,count-188))if(sample[offset]==0x47.toByte()&&sample[offset+188]==0x47.toByte())return true;return false}
+ private fun downloadAudio(c:Context,id:String,entry:TransferStore.Entry,folder:File,audioUrl:URL):File {
+  val audioBody=playlist(c,id,audioUrl,entry)
+  check(audioBody.contains("#EXT-X-ENDLIST")){"Аудиопоток не завершён"}
+  check(!audioBody.contains("#EXT-X-MAP")&&!audioBody.contains("#EXT-X-BYTERANGE")){
+   "Аудиоплейлист fMP4/byte-range пока не поддерживается"
+  }
+  check(audioBody.lines().none{it.startsWith("#EXT-X-KEY:")&&!it.contains("METHOD=NONE",true)}){
+   "Зашифрованная аудиодорожка не поддерживается"
+  }
+  val segments=audioBody.lines().map{it.trim()}.filter{it.isNotEmpty()&&!it.startsWith("#")}
+  check(segments.isNotEmpty()){"Аудиоплейлист пуст"}
+  val marker=File(folder,"audio-manifest.paths")
+  // Ignore expiring CDN query tokens, but do not silently merge different audio.
+  val manifestPaths=segments.joinToString("\n"){URL(audioUrl,it).path}
+  if(marker.exists() && marker.readText()!=manifestPaths){
+   throw IOException("Сервер изменил аудиосегменты. Сохранённые части не перезаписаны.")
+  }
+  marker.writeText(manifestPaths)
+  for((index,segment) in segments.withIndex()){
+   if(isStopped(c,id))throw InterruptedIOException("Аудиозагрузка остановлена")
+   val target=File(folder,"audio_%06d.part.ts".format(index))
+   val tmp=File(folder,"audio_%06d.download".format(index))
+   if(target.exists() && target.length()>0L)continue
+   var last:Exception?=null
+   for(attempt in 1..5){
+    if(isStopped(c,id))throw InterruptedIOException("Аудиозагрузка остановлена")
+    if(!awaitNetwork(c,id))throw IOException("Ожидание сети")
+    tmp.delete()
+    val conn=connect(c,id,URL(audioUrl,segment),entry)
+    try{
+     if(conn.responseCode!=200)throw HttpStatusException(conn.responseCode)
+     conn.inputStream.use{input->tmp.outputStream().use{output->
+      val buffer=ByteArray(32768)
+      while(true){
+       if(isStopped(c,id))throw InterruptedIOException("Аудиозагрузка остановлена")
+       val n=input.read(buffer)
+       if(n<0)break
+       output.write(buffer,0,n)
+      }
+     }}
+     check(tmp.length()>0L){"Пустой аудиосегмент"}
+     check(tmp.renameTo(target)){"Ошибка сохранения аудиосегмента"}
+     last=null
+     break
+    }catch(e:Exception){
+     tmp.delete()
+     if(isStopped(c,id))throw e
+     last=e
+     if(e is HttpStatusException&&e.status in listOf(401,403,404,410))throw e
+     if(attempt<5)Thread.sleep(1000L*(1L shl(attempt-1)))
+    }finally{connections.remove(id,conn);conn.disconnect()}
+   }
+   if(last!=null)throw IOException("Аудиосегмент ${index+1}: ${last.message}",last)
+   TransferStore.setState(c,id,"Загрузка аудио")
+  }
+  val extension=if(segments[0].substringBefore('?').endsWith(".aac",true))".aac" else ".ts"
+  val merged=File(folder,"assembled_audio"+extension)
+  merged.outputStream().use{output->
+   segments.indices.forEach{index->
+    File(folder,"audio_%06d.part.ts".format(index)).inputStream().use{it.copyTo(output,32768)}
+   }
+  }
+  return merged
+ }
  private fun perform(c:Context,id:String,callback:(String)->Unit){
   val initial=TransferStore.entries(c).firstOrNull{it.id==id}?:return;val folder=File(c.filesDir,"hls_${id}").apply{mkdirs()};var bytes=0L;var progress=initial.progress.coerceIn(0,99)
   fun publish(value:String,pct:Int,rate:Long=0,eta:Long=-1):Boolean{progress=if(value=="Готово")100 else pct.coerceIn(0,99);return TransferStore.updateIfActive(c,id,initial.name,value,progress,bytes,initial.uri,rate,eta,initial.source,initial.referer,initial.userAgent,initial.quality)}
   try{
    check(initial.source.isNotBlank()&&initial.uri.isNotBlank()){"Отсутствует адрес или место сохранения"}
    var url=URL(initial.source);var body=playlist(c,id,url,initial);var depth=0
-   while(body.contains("#EXT-X-STREAM-INF")){check(depth++<4){"Слишком глубокий HLS master-плейлист"};url=selectVariant(body,url,initial.quality);body=playlist(c,id,url,initial)}
+   var audioUrl=initial.audioSource.takeIf{it.isNotBlank()}?.let{URL(it)}
+   while(body.contains("#EXT-X-STREAM-INF")){
+    check(depth++<4){"Слишком глубокий HLS master-плейлист"}
+    val variant=selectVariant(body,url,initial.quality,initial.audioLanguage)
+    if(audioUrl==null)audioUrl=variant.audioUrl
+    url=variant.url
+    body=playlist(c,id,url,initial)
+   }
    check(body.contains("#EXT-X-ENDLIST")){"Прямой эфир не поддерживается"}
    val keys=body.lines().filter{it.trim().startsWith("#EXT-X-KEY:")};check(keys.none{!it.contains("METHOD=NONE",true)}){"AES-128/DRM-шифрование не поддерживается"}
    check(!body.contains("#EXT-X-MAP")){"fMP4 HLS пока не поддерживается"};check(!body.contains("#EXT-X-BYTERANGE")){"HLS byte-range пока не поддерживается"}
@@ -217,7 +328,7 @@ object HlsDownloader {
     }.joinToString("&")
     resolved.path.orEmpty() + if(query.isNotBlank()) "?$query" else ""
    }
-   val mediaSequence=Regex("""(?m)^#EXT-X-MEDIA-SEQUENCE:(\\d+)""").find(body)?.groupValues?.get(1).orEmpty()
+   val mediaSequence=Regex("""(?m)^#EXT-X-MEDIA-SEQUENCE:(\d+)""").find(body)?.groupValues?.get(1).orEmpty()
    val fingerprint=MessageDigest.getInstance("SHA-256")
     .digest((initial.source.substringBefore('?')+"\n"+mediaSequence+"\n"+stableSegments).toByteArray(Charsets.UTF_8))
     .joinToString(""){"%02x".format(it.toInt() and 255)}
@@ -268,7 +379,11 @@ object HlsDownloader {
     if(isPaused(c,id))TransferStore.setState(c,id,"Пауза")
     return
    }
-   remuxToMp4(c,id,transport,converted)
+   val audioTransport=audioUrl?.let{
+    if(!publish("Загрузка аудио",99))return
+    downloadAudio(c,id,initial,folder,it)
+   }
+   remuxToMp4(c,id,transport,converted,audioTransport)
    if(isDeleted(c,id)){cleanup(c,id);return}
    if(isPaused(c,id)){TransferStore.setState(c,id,"Пауза");return}
    c.contentResolver.openOutputStream(Uri.parse(initial.uri),"wt")?.use{out->
