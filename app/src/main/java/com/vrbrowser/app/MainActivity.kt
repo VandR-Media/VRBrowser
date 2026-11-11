@@ -14,6 +14,8 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URLEncoder
 import io.github.edsuns.adfilter.AdFilter
+import io.github.edsuns.adfilter.util.None
+import androidx.lifecycle.Observer
 
 class MainActivity : Activity() {
  private val neonBlue = Color.rgb(39, 190, 245)
@@ -35,6 +37,7 @@ class MainActivity : Activity() {
  private val knownQualities=mutableMapOf<String,String>()
  private val shield by lazy { Shield(this) }
  private val adFilter by lazy { AdFilter.get() }
+ private val filterDirtyObserver = Observer<None> { runOnUiThread { tabs.forEach { it.clearCache(false) } } }
  private val prefs by lazy { getSharedPreferences("browser", MODE_PRIVATE) }
  private val bookmarks get() = readList("bookmarks")
  private val history get() = readList("history")
@@ -52,6 +55,7 @@ class MainActivity : Activity() {
  }
  private fun row(): LinearLayout = LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL }
  override fun onCreate(savedInstanceState: Bundle?) { super.onCreate(savedInstanceState)
+  adFilter.viewModel.onDirty.observeForever(filterDirtyObserver)
   window.statusBarColor=Color.rgb(19,24,32); window.navigationBarColor=Color.rgb(19,24,32)
   root=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL; setBackgroundColor(Color.rgb(19,24,32)) }; setContentView(root)
   val top=row().apply { gravity=Gravity.CENTER_VERTICAL; setPadding(dp(9),dp(8),dp(9),dp(8)) }
@@ -132,6 +136,7 @@ class MainActivity : Activity() {
     return super.shouldInterceptRequest(view,request)
    }
    override fun onPageStarted(v:WebView?,url:String?,favicon:android.graphics.Bitmap?) {
+    if(v==active()) { media.clear(); detected.clear(); playerButton.visibility=View.GONE }
     if(shield.mode()!=0) try { adFilter.performScript(v,url) } catch (_:Throwable) { }
     super.onPageStarted(v,url,favicon)
    }
@@ -492,5 +497,5 @@ class MainActivity : Activity() {
  private fun dialogBuilder(): AlertDialog.Builder = AlertDialog.Builder(this, R.style.VRDialog)
  private fun alert(title:String,msg:String) { dialogBuilder().setTitle(title).setMessage(msg).setPositiveButton("OK",null).show() }
  override fun onBackPressed() { if(active().canGoBack())active().goBack() else super.onBackPressed() }
- override fun onDestroy() { tabs.forEach { it.destroy() }; super.onDestroy() }
+ override fun onDestroy() { adFilter.viewModel.onDirty.removeObserver(filterDirtyObserver); tabs.forEach { it.destroy() }; super.onDestroy() }
 }
