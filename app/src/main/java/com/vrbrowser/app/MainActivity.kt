@@ -377,21 +377,60 @@ class MainActivity : Activity() {
  }
  private fun probeHlsResolution(url:String,referer:String,userAgent:String):Pair<String?,android.graphics.Bitmap?> {
   var retriever:android.media.MediaMetadataRetriever?=null
+  var extractor:android.media.MediaExtractor?=null
+  val temp=java.io.File.createTempFile("vrprobe_",".ts",cacheDir)
   return try {
    val playlist=readHlsPlaylist(url,referer,userAgent)
    if(playlist.contains("#EXT-X-STREAM-INF"))return Pair(null,null)
-   val segment=playlist.lines().firstOrNull{it.isNotBlank()&&!it.trim().startsWith("#")} ?: return Pair(null,null)
+   val segment=playlist.lines().firstOrNull{it.isNotBlank()&&!it.trim().startsWith("#")}
+    ?:return Pair(null,null)
    val segmentUrl=java.net.URL(java.net.URL(url),segment.trim()).toString()
-   val headers=linkedMapOf("User-Agent" to userAgent)
-   if(referer.startsWith("http"))headers["Referer"]=referer
-   CookieManager.getInstance().getCookie(segmentUrl)?.takeIf{it.isNotBlank()}?.let{headers["Cookie"]=it}
-   retriever=android.media.MediaMetadataRetriever()
-   retriever.setDataSource(segmentUrl,headers)
-   val height=retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull()
-   val frame=try{retriever.getFrameAtTime(0,android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC)}catch(_:Exception){null}
-   Pair(height?.takeIf{it>0}?.let{"${it}p"},frame)
-  } catch(_:Exception){Pair(null,null)}
-  finally { try{retriever?.release()}catch(_:Exception){} }
+   val conn=(java.net.URL(segmentUrl).openConnection() as java.net.HttpURLConnection).apply {
+    connectTimeout=8000;readTimeout=12000;instanceFollowRedirects=true
+    setRequestProperty("User-Agent",userAgent)
+    setRequestProperty("Accept-Encoding","identity")
+    if(referer.startsWith("http")){
+     setRequestProperty("Referer",referer)
+     val parsed=android.net.Uri.parse(referer)
+     setRequestProperty("Origin","${parsed.scheme}://${parsed.authority}")
+    }
+    try{CookieManager.getInstance().getCookie(segmentUrl)?.takeIf{it.isNotBlank()}?.let{
+     setRequestProperty("Cookie",it)
+    }}catch(_:Exception){}
+   }
+   try {
+    if(conn.responseCode!=200)return Pair(null,null)
+    conn.inputStream.use{input->temp.outputStream().use{output->
+     val buffer=ByteArray(32768)
+     var written=0
+     while(written<12*1024*1024){
+      val count=input.read(buffer,0,minOf(buffer.size,12*1024*1024-written))
+      if(count<0)break
+      output.write(buffer,0,count)
+      written+=count
+     }
+    }}
+   }finally{conn.disconnect()}
+   extractor=android.media.MediaExtractor().apply{setDataSource(temp.absolutePath)}
+   var height:Int?=null
+   val mediaExtractor=extractor
+   for(i in 0 until mediaExtractor.trackCount){
+    val format=mediaExtractor.getTrackFormat(i)
+    if(format.getString(android.media.MediaFormat.KEY_MIME).orEmpty().startsWith("video/") &&
+      format.containsKey(android.media.MediaFormat.KEY_HEIGHT)){
+     height=format.getInteger(android.media.MediaFormat.KEY_HEIGHT).takeIf{it>0}
+     break
+    }
+   }
+   retriever=android.media.MediaMetadataRetriever().apply{setDataSource(temp.absolutePath)}
+   val frame=try{retriever.getFrameAtTime(0L,android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC)}catch(_:Exception){null}
+   Pair(height?.let{"${it}p"},frame)
+  }catch(_:Exception){Pair(null,null)}
+  finally{
+   try{retriever?.release()}catch(_:Exception){}
+   try{extractor?.release()}catch(_:Exception){}
+   temp.delete()
+  }
  }
  private fun inspectMedia(url: String, referer: String, userAgent:String): MediaDetails {
   var quality:String?=null
@@ -410,7 +449,9 @@ class MainActivity : Activity() {
    } catch(_:Exception) { }
    val estimate=estimateHls(url,referer,userAgent)
    duration=duration ?: estimate.first
-   estimatedBytes=estimate.second
+   // A small sample of CDN segments underestimates variable-bit-rate HLS.
+   // Show unknown rather than promising a specific wrong download size.
+   estimatedBytes=null
    if(quality==null) {
     val probe=probeHlsResolution(url,referer,userAgent)
     quality=probe.first
