@@ -37,7 +37,12 @@ class MainActivity : Activity() {
  private val knownQualities=mutableMapOf<String,String>()
  private val shield by lazy { Shield(this) }
  private val adFilter by lazy { AdFilter.get() }
- private val filterDirtyObserver = Observer<None> { runOnUiThread { tabs.forEach { it.clearCache(false) } } }
+ private val filterDirtyObserver = Observer<None> {
+  runOnUiThread {
+   tabs.forEach { it.clearCache(false) }
+   if(tabs.isNotEmpty())status.text="Фильтры рекламы обновлены · перезагрузи страницу"
+  }
+ }
  private val prefs by lazy { getSharedPreferences("browser", MODE_PRIVATE) }
  private val bookmarks get() = readList("bookmarks")
  private val history get() = readList("history")
@@ -55,7 +60,8 @@ class MainActivity : Activity() {
  }
  private fun row(): LinearLayout = LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL }
  override fun onCreate(savedInstanceState: Bundle?) { super.onCreate(savedInstanceState)
-  adFilter.viewModel.onDirty.observeForever(filterDirtyObserver)
+  try { adFilter.viewModel.onDirty.observeForever(filterDirtyObserver) }
+  catch(error:Throwable) { android.util.Log.w("V&R Browser","Ad filter observer unavailable",error) }
   window.statusBarColor=Color.rgb(19,24,32); window.navigationBarColor=Color.rgb(19,24,32)
   root=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL; setBackgroundColor(Color.rgb(19,24,32)) }; setContentView(root)
   val top=row().apply { gravity=Gravity.CENTER_VERTICAL; setPadding(dp(9),dp(8),dp(9),dp(8)) }
@@ -142,6 +148,27 @@ class MainActivity : Activity() {
    }
    override fun shouldOverrideUrlLoading(v:WebView?,r:WebResourceRequest?):Boolean { val u=r?.url ?:return false; return if(u.scheme=="http"||u.scheme=="https") false else { try { startActivity(Intent(Intent.ACTION_VIEW,u)) } catch (_:Exception){}; true } }
    override fun onPageFinished(v:WebView?,url:String?) { if(v==active()) { address.setText(url); status.text="Готов · найдено медиа: ${media.size}"; if(synchronized(detected){detected.any{it.contains(".m3u8",true)}}){playerButton.visibility=View.VISIBLE;playerButton.bringToFront()} }; if(url?.startsWith("https://")==true) { val h=history; h.remove(url); h.add(url); writeList("history",h) }; scanPage(v) }
+   override fun onRenderProcessGone(view:WebView?,detail:RenderProcessGoneDetail?):Boolean {
+    val failed=view ?: return true
+    val failedUrl=failed.url?.takeIf{it.startsWith("http://")||it.startsWith("https://")} ?: "https://www.google.com"
+    runOnUiThread {
+     val index=tabs.indexOf(failed)
+     if(index>=0) {
+      pages.removeView(failed)
+      tabs.removeAt(index)
+      failed.destroy()
+      if(tabs.isEmpty()) {
+       current=0
+       addTab(failedUrl)
+      } else {
+       if(index<current)current--
+       switchTab(current.coerceIn(0,tabs.lastIndex))
+      }
+     } else failed.destroy()
+     status.text="Вкладка восстановлена после сбоя WebView"
+    }
+    return true
+   }
   }
   web.setDownloadListener { url,ua,disposition,mime,_ -> if(url.startsWith("https://")||url.startsWith("http://")) confirmDownload(url,ua,mime,disposition) }
   web.setOnLongClickListener { val hit=web.hitTestResult; val u=hit.extra; if(u!=null && u.startsWith("http")) { media.add(u); status.text="Ссылка добавлена в Медиа"; true } else false }
