@@ -279,6 +279,8 @@ class PlayerActivity : Activity() {
   fullscreenControls.bringToFront()
   fullscreenButton.bringToFront()
   setContentView(rootLayout)
+  pendingDownloadQuality=savedInstanceState?.getString("download_quality")
+  pendingAudioLanguage=savedInstanceState?.getString("download_audio")
   if(savedInstanceState?.getBoolean("fullscreen")==true)setFullscreen(true)
   if(savedInstanceState?.getBoolean("cropped")==true)setCrop(true)
 
@@ -330,7 +332,7 @@ class PlayerActivity : Activity() {
      })
      p.setMediaItem(MediaItem.fromUri(url))
      p.prepare()
-     val savedPosition=savedInstanceState?.getLong("player_position") ?: 0L
+     val savedPosition=savedInstanceState?.getLong("player_position") ?: intent.getLongExtra("start_position",0L)
      if(savedPosition>0L)p.seekTo(savedPosition)
      p.playWhenReady=savedInstanceState?.getBoolean("player_playing") ?: true
     }
@@ -551,6 +553,8 @@ class PlayerActivity : Activity() {
  }
 
  override fun onSaveInstanceState(outState:Bundle) {
+  outState.putString("download_quality",pendingDownloadQuality)
+  outState.putString("download_audio",pendingAudioLanguage)
   outState.putBoolean("fullscreen",fullscreen)
   outState.putBoolean("cropped",cropped)
   outState.putLong("player_position",player?.currentPosition ?: 0L)
