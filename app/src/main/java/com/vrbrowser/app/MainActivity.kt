@@ -213,6 +213,26 @@ class MainActivity : Activity() {
   },1700L)
  }
 
+ private fun hasFullVideoHls(url:String,referer:String,userAgent:String,depth:Int=0):Boolean {
+  if(depth>4)return false
+  return try {
+   val content=readHlsPlaylist(url,referer,userAgent)
+   if(content.contains("#EXT-X-STREAM-INF:")) {
+    val lines=content.lines()
+    val child=lines.mapIndexedNotNull{index,line->
+     if(line.trim().startsWith("#EXT-X-STREAM-INF:"))
+      lines.drop(index+1).firstOrNull{it.isNotBlank()&&!it.trim().startsWith("#")}
+     else null
+    }.firstOrNull() ?: return false
+    hasFullVideoHls(java.net.URL(java.net.URL(url),child).toString(),referer,userAgent,depth+1)
+   } else {
+    val duration=Regex("""#EXTINF:([0-9]+(?:\\.[0-9]+)?)""").findAll(content)
+     .sumOf{it.groupValues[1].toDoubleOrNull() ?: 0.0}
+    duration>=120.0
+   }
+  } catch(_:Exception){false}
+ }
+
  private fun openDetectedPlayer(manual:Boolean=true) {
   val urls=synchronized(detected){detected.toList()}
   val hls=urls.filter{it.contains(".m3u8",true)}
@@ -228,10 +248,14 @@ class MainActivity : Activity() {
    val master=hls.asReversed().firstOrNull { candidate ->
     try {
      val body=readHlsPlaylist(candidate,referer,userAgent)
-     body.contains("#EXT-X-STREAM-INF") || body.contains("#EXT-X-MEDIA:TYPE=AUDIO")
+     (body.contains("#EXT-X-STREAM-INF") || body.contains("#EXT-X-MEDIA:TYPE=AUDIO")) &&
+      hasFullVideoHls(candidate,referer,userAgent)
     } catch (_:Exception) { false }
    }
-   val source=master ?: if(manual)(hls.lastOrNull() ?: direct) else null
+   val fullLeaf=if(master==null)hls.asReversed().firstOrNull{candidate->
+    hasFullVideoHls(candidate,referer,userAgent)
+   }else null
+   val source=master ?: fullLeaf ?: if(manual)(hls.lastOrNull() ?: direct) else null
    runOnUiThread {
     if(source.isNullOrBlank() || isFinishing || isDestroyed || tabs.isEmpty() || web!=active() || inlinePlayer!=null)return@runOnUiThread
     val fullscreen=Intent(this,PlayerActivity::class.java)
