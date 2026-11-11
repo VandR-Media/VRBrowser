@@ -89,7 +89,7 @@ object HlsDownloader {
   return selected.url
  }
  private fun qualityHeight(value:String?):Int? =
-  Regex("""(?i)(\\d{3,4})p?""").find(value.orEmpty())?.groupValues?.get(1)?.toIntOrNull()
+  Regex("""(?i)(\d{3,4})p?""").find(value.orEmpty())?.groupValues?.get(1)?.toIntOrNull()
 
  private fun videoHeight(file:File):Int? {
   val extractor=MediaExtractor()
