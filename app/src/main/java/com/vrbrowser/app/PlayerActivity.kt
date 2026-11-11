@@ -88,8 +88,8 @@ class PlayerActivity : Activity() {
 
  override fun onCreate(savedInstanceState:Bundle?) {
   super.onCreate(savedInstanceState)
-  window.statusBarColor=backgroundColor
-  window.navigationBarColor=backgroundColor
+  window.statusBarColor=backgroundColorColor
+  window.navigationBarColor=backgroundColorColor
   window.decorView.keepScreenOn=true
 
   val url=intent.getStringExtra("url") ?: run { finish(); return }
@@ -119,7 +119,7 @@ class PlayerActivity : Activity() {
   root.addView(header,LinearLayout.LayoutParams(-1,dp(62)))
 
   val stage=FrameLayout(this).apply {
-   background=rounded(Color.BLACK,22,Color.rgb(48,68,91))
+   setBackground(rounded(Color.BLACK,22,Color.rgb(48,68,91)))
    clipToOutline=true
    elevation=dp(3).toFloat()
   }
