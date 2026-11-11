@@ -4,6 +4,8 @@ import android.app.*
 import android.os.*
 import android.content.*
 import android.graphics.Color
+import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.graphics.drawable.GradientDrawable
 import android.view.*
 import android.webkit.*
@@ -34,6 +36,7 @@ class MainActivity : Activity() {
  private var inlinePlayer:InlinePlayerController?=null
  private var autoInlinePending=false
  private val tabs = mutableListOf<WebView>()
+ private val tabPreviews = mutableMapOf<WebView,Bitmap>()
  private var current = 0
  private val media = linkedSetOf<String>()
  private val detected = java.util.Collections.synchronizedSet(linkedSetOf<String>())
@@ -198,6 +201,8 @@ class MainActivity : Activity() {
   tabs.add(web); pages.addView(web); playerButton.bringToFront(); switchTab(tabs.lastIndex); web.loadUrl(url)
  }
  private fun switchTab(index:Int) {
+  if(index !in tabs.indices)return
+  if(tabs.isNotEmpty() && current in tabs.indices && current!=index)captureTab(tabs[current])
   inlinePlayer?.release();inlinePlayer=null;autoInlinePending=false
   current=index
   tabs.forEachIndexed { i,v -> v.visibility=if(i==index) View.VISIBLE else View.GONE }
@@ -665,7 +670,77 @@ class MainActivity : Activity() {
     }catch(e:Exception){alert("Ошибка",e.message?:"Не удалось запустить загрузку")}
    }.show()
  }
- private fun showTabs() { dialogBuilder().setTitle("Вкладки").setItems(tabs.mapIndexed { i,v -> "${i+1}. ${(v.title?:v.url?:"Новая вкладка").take(55)}" }.toTypedArray()) { _,i -> switchTab(i) }.setPositiveButton("Новая") { _,_->addTab("https://www.google.com") }.setNeutralButton("Закрыть текущую") { _,_-> if(tabs.size>1) { val old=active(); tabs.removeAt(current); pages.removeView(old); old.destroy(); switchTab(tabs.lastIndex) } }.show() }
+ private fun captureTab(web:WebView) {
+  if(web.width<=0 || web.height<=0 || web.visibility!=View.VISIBLE)return
+  try {
+   val w=dp(220); val h=dp(128)
+   val bitmap=Bitmap.createBitmap(w,h,Bitmap.Config.RGB_565)
+   val canvas=Canvas(bitmap)
+   canvas.drawColor(Color.WHITE)
+   canvas.save()
+   canvas.scale(w.toFloat()/web.width,h.toFloat()/web.height)
+   web.draw(canvas)
+   canvas.restore()
+   tabPreviews.put(web,bitmap)?.takeIf{it!=bitmap}?.recycle()
+  } catch(error:Exception) { android.util.Log.w("V&R Browser","Tab preview unavailable",error) }
+ }
+ private fun closeTab(index:Int) {
+  if(index !in tabs.indices)return
+  val web=tabs.removeAt(index)
+  tabPreviews.remove(web)?.recycle()
+  pages.removeView(web)
+  web.stopLoading(); web.destroy()
+  if(tabs.isEmpty()) { current=0; addTab("https://www.google.com") }
+  else switchTab(if(index<current)current-1 else current.coerceAtMost(tabs.lastIndex))
+ }
+ private fun showTabs() {
+  if(tabs.isNotEmpty())captureTab(active())
+  val content=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL; setPadding(dp(14),dp(8),dp(14),dp(8)) }
+  val scroll=ScrollView(this)
+  val items=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL }
+  scroll.addView(items)
+  content.addView(scroll,LinearLayout.LayoutParams(-1,0,1f))
+  val create=TextView(this).apply {
+   text="＋  Новая вкладка"; textSize=17f; gravity=Gravity.CENTER
+   setTextColor(Color.WHITE); background=rounded(surface,17,neonPink)
+   setOnClickListener { addTab("https://www.google.com"); showTabsDialog?.dismiss() }
+  }
+  content.addView(create,LinearLayout.LayoutParams(-1,dp(52)).apply { topMargin=dp(8) })
+  val dialog=dialogBuilder().setTitle("Вкладки · ${tabs.size}").setView(content)
+   .setNegativeButton("Готово",null).create()
+  showTabsDialog=dialog
+  tabs.toList().forEachIndexed { index,web ->
+   val row=LinearLayout(this).apply {
+    orientation=LinearLayout.HORIZONTAL; gravity=Gravity.CENTER_VERTICAL
+    setPadding(dp(7),dp(7),dp(7),dp(7))
+    background=rounded(surface,15,if(index==current)neonPink else Color.rgb(45,78,99))
+   }
+   val preview=ImageView(this).apply {
+    setBackgroundColor(Color.rgb(38,49,65)); scaleType=ImageView.ScaleType.CENTER_CROP
+    tabPreviews[web]?.takeIf{!it.isRecycled}?.let{setImageBitmap(it)}
+   }
+   row.addView(preview,LinearLayout.LayoutParams(dp(104),dp(76)))
+   val title=TextView(this).apply {
+    text=(web.title?.takeIf{it.isNotBlank()} ?: web.url ?: "Новая вкладка").take(80)
+    textSize=14f; setTextColor(Color.WHITE); maxLines=2
+    setPadding(dp(10),0,dp(4),0)
+    setOnClickListener { switchTab(tabs.indexOf(web)); dialog.dismiss() }
+   }
+   row.addView(title,LinearLayout.LayoutParams(0,-2,1f))
+   val close=TextView(this).apply {
+    text="×"; textSize=29f; gravity=Gravity.CENTER; setTextColor(neonPink)
+    contentDescription="Закрыть вкладку"
+    setOnClickListener { val i=tabs.indexOf(web); if(i>=0)closeTab(i); dialog.dismiss(); showTabs() }
+   }
+   row.addView(close,LinearLayout.LayoutParams(dp(42),dp(55)))
+   row.setOnClickListener { val i=tabs.indexOf(web); if(i>=0)switchTab(i); dialog.dismiss() }
+   items.addView(row,LinearLayout.LayoutParams(-1,dp(90)).apply { bottomMargin=dp(9) })
+  }
+  dialog.setOnDismissListener { if(showTabsDialog===dialog)showTabsDialog=null }
+  dialog.show()
+  dialog.window?.setLayout((resources.displayMetrics.widthPixels*0.94f).toInt(),(resources.displayMetrics.heightPixels*0.76f).toInt())
+ }
+ private var showTabsDialog:AlertDialog?=null
  private fun showBookmarks() { val list=bookmarks; dialogBuilder().setTitle("Закладки").setItems(list.toTypedArray()) { _,i -> navigate(list[i]) }.setPositiveButton("Добавить текущую") { _,_-> val u=active().url; if(u!=null){ list.remove(u); list.add(u); writeList("bookmarks",list) } }.setNegativeButton("Закрыть",null).show() }
  private fun showMenu() { val choices=arrayOf("История","Библиотека загрузок","Обновить","Очистить историю","Очистить данные сайтов","V&R Shield","Диагностика","Автовстраивание V&R Player")
   dialogBuilder().setItems(choices) { _,i -> when(i) { 0->{ val h=history.reversed(); dialogBuilder().setTitle("История").setItems(h.toTypedArray()) { _,j -> navigate(h[j]) }.show() }; 1->startActivity(Intent(this, LibraryActivity::class.java)); 2->active().reload(); 3->writeList("history",emptyList()); 5->showShield(); 6->startActivity(Intent(this, DiagnosticActivity::class.java)); 7->{
@@ -695,6 +770,7 @@ class MainActivity : Activity() {
  override fun onDestroy() {
   inlinePlayer?.release(false);inlinePlayer=null
   try{adFilter.viewModel.onDirty.removeObserver(filterDirtyObserver)}catch(_:Throwable){}
+  tabPreviews.values.forEach { if(!it.isRecycled)it.recycle() }; tabPreviews.clear()
   tabs.forEach { try{it.destroy()}catch(_:Throwable){} }
   super.onDestroy()
  }
