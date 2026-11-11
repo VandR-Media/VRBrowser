@@ -133,7 +133,8 @@ class MainActivity : Activity() {
  private fun dp(n:Int)=(n*resources.displayMetrics.density).toInt()
  private fun active()=tabs[current]
  private fun addTab(url:String) {
-  val web=WebView(this); web.settings.apply { javaScriptEnabled=true; domStorageEnabled=true; mediaPlaybackRequiresUserGesture=true; builtInZoomControls=true; displayZoomControls=false; allowFileAccess=false; allowContentAccess=false; mixedContentMode=WebSettings.MIXED_CONTENT_NEVER_ALLOW }
+  val web=WebView(this); web.settings.apply { javaScriptEnabled=true; domStorageEnabled=true; mediaPlaybackRequiresUserGesture=true; builtInZoomControls=true; displayZoomControls=false; allowFileAccess=false; allowContentAccess=false; allowFileAccessFromFileURLs=false; allowUniversalAccessFromFileURLs=false; mixedContentMode=WebSettings.MIXED_CONTENT_NEVER_ALLOW; safeBrowsingEnabled=true }
+  CookieManager.getInstance().setAcceptThirdPartyCookies(web,prefs.getBoolean("third_party_cookies",false))
   try { adFilter.setupWebView(web) } catch (_:Throwable) { }
   web.webChromeClient=object:WebChromeClient() {
    override fun onShowCustomView(view:View,callback:CustomViewCallback) { val dialog=Dialog(this@MainActivity,android.R.style.Theme_Black_NoTitleBar_Fullscreen); dialog.setContentView(view); dialog.setOnDismissListener { callback.onCustomViewHidden() }; dialog.show(); view.setOnLongClickListener { dialog.dismiss(); true } }
@@ -169,7 +170,28 @@ class MainActivity : Activity() {
     if(shield.mode()!=0) try { adFilter.performScript(v,url) } catch (_:Throwable) { }
     super.onPageStarted(v,url,favicon)
    }
-   override fun shouldOverrideUrlLoading(v:WebView?,r:WebResourceRequest?):Boolean { val u=r?.url ?:return false; return if(u.scheme=="http"||u.scheme=="https") false else { try { startActivity(Intent(Intent.ACTION_VIEW,u)) } catch (_:Exception){}; true } }
+   override fun shouldOverrideUrlLoading(v:WebView?,r:WebResourceRequest?):Boolean {
+    val uri=r?.url ?:return false
+    val scheme=uri.scheme?.lowercase() ?:return true
+    if(scheme=="http" || scheme=="https")return false
+    if(!r.isForMainFrame || !r.hasGesture())return true
+    if(scheme !in setOf("tel","mailto","sms","smsto"))return true
+    dialogBuilder().setTitle("Открыть внешнее приложение?")
+     .setMessage("Сайт хочет открыть ссылку: ${uri.toString().take(220)}")
+     .setPositiveButton("Открыть") { _,_ ->
+      try { startActivity(Intent(Intent.ACTION_VIEW,uri).addCategory(Intent.CATEGORY_BROWSABLE)) }
+      catch(_:Exception) { Toast.makeText(this@MainActivity,"Нет приложения для ссылки",Toast.LENGTH_SHORT).show() }
+     }.setNegativeButton("Отмена",null).show()
+    return true
+   }
+   override fun onReceivedSslError(view:WebView?, handler:SslErrorHandler?, error:android.net.http.SslError?) {
+    handler?.cancel()
+    runOnUiThread { if(!isFinishing)alert("Небезопасное соединение","Проверка HTTPS-сертификата не пройдена. Страница заблокирована.") }
+   }
+   override fun onSafeBrowsingHit(view:WebView?,request:WebResourceRequest?,threatType:Int,callback:SafeBrowsingResponse?) {
+    callback?.backToSafety(true)
+    runOnUiThread { if(!isFinishing)alert("Опасный сайт","WebView заблокировал потенциально опасную страницу.") }
+   }
    override fun onPageFinished(v:WebView?,url:String?) { if(v==active()) { address.setText(url); status.text="Готов · найдено медиа: ${(media+detected).size}"; if(synchronized(detected){detected.any{it.contains(".m3u8",true)}}){playerButton.visibility=View.VISIBLE;playerButton.bringToFront()} }; if(url?.startsWith("https://")==true) { val h=history; h.remove(url); h.add(url); writeList("history",h) }; scanPage(v) }
    override fun onRenderProcessGone(view:WebView?,detail:RenderProcessGoneDetail?):Boolean {
     val failed=view ?: return true
@@ -742,23 +764,64 @@ class MainActivity : Activity() {
  }
  private var showTabsDialog:AlertDialog?=null
  private fun showBookmarks() { val list=bookmarks; dialogBuilder().setTitle("Закладки").setItems(list.toTypedArray()) { _,i -> navigate(list[i]) }.setPositiveButton("Добавить текущую") { _,_-> val u=active().url; if(u!=null){ list.remove(u); list.add(u); writeList("bookmarks",list) } }.setNegativeButton("Закрыть",null).show() }
- private fun showMenu() { val choices=arrayOf("История","Библиотека загрузок","Обновить","Очистить историю","Очистить данные сайтов","V&R Shield","Диагностика","Автовстраивание V&R Player")
+ private fun showMenu() { val choices=arrayOf("История","Библиотека загрузок","Обновить","Очистить историю","Очистить данные сайтов","V&R Shield","Диагностика","Автовстраивание V&R Player","Сторонние cookies")
   dialogBuilder().setItems(choices) { _,i -> when(i) { 0->{ val h=history.reversed(); dialogBuilder().setTitle("История").setItems(h.toTypedArray()) { _,j -> navigate(h[j]) }.show() }; 1->startActivity(Intent(this, LibraryActivity::class.java)); 2->active().reload(); 3->writeList("history",emptyList()); 5->showShield(); 6->startActivity(Intent(this, DiagnosticActivity::class.java)); 7->{
     val enabled=!prefs.getBoolean("auto_inline_player",true)
     prefs.edit().putBoolean("auto_inline_player",enabled).apply()
     Toast.makeText(this,if(enabled)"Автовстраивание включено" else "Автовстраивание выключено",Toast.LENGTH_SHORT).show()
-   }; 4->dialogBuilder().setMessage("Удалить cookies и кэш браузера?").setPositiveButton("Удалить") { _,_->CookieManager.getInstance().removeAllCookies(null); tabs.forEach{it.clearCache(true)} }.setNegativeButton("Отмена",null).show() } }.show()
+   }; 8->{
+    val enabled=!prefs.getBoolean("third_party_cookies",false)
+    prefs.edit().putBoolean("third_party_cookies",enabled).apply()
+    tabs.forEach { CookieManager.getInstance().setAcceptThirdPartyCookies(it,enabled) }
+    Toast.makeText(this,if(enabled)"Сторонние cookies разрешены" else "Сторонние cookies запрещены",Toast.LENGTH_LONG).show()
+   }; 4->dialogBuilder().setMessage("Удалить cookies, кэш, локальное хранилище и историю посещений?")
+      .setPositiveButton("Удалить") { _,_->
+       CookieManager.getInstance().removeAllCookies(null)
+       CookieManager.getInstance().flush()
+       WebStorage.getInstance().deleteAllData()
+       tabs.forEach { it.clearCache(true); it.clearHistory(); it.clearFormData() }
+       writeList("history",emptyList())
+       Toast.makeText(this,"Данные сайтов очищены",Toast.LENGTH_SHORT).show()
+      }.setNegativeButton("Отмена",null).show() } }.show()
  }
  private fun showShield() {
-  val modes=arrayOf("Выключен", "Сбалансированный", "Строгий")
-  val current=shield.mode()
-  dialogBuilder().setTitle("V&R Shield · режим").setSingleChoiceItems(modes,current) { dialog,which -> shield.setMode(which); dialog.dismiss(); Toast.makeText(this,"Режим сохранён",Toast.LENGTH_SHORT).show() }
-   .setPositiveButton("Обновить фильтры") { _,_ ->
-    try { adFilter.viewModel.filters.value?.values?.forEach { adFilter.viewModel.download(it.id) } } catch (_:Throwable) { }
-    shield.updateNow { result -> runOnUiThread { alert("Фильтры",result) } }
+  val modes=arrayOf("Выключен","Сбалансированный","Строгий")
+  val sources=shield.sources
+  val choices=arrayOf(
+   "Режим: ${modes[shield.mode()]}",
+   "Источники доменов (${sources.count{shield.sourceEnabled(it.id)}} из ${sources.size})",
+   "Обновить все фильтры",
+   "Исключения",
+   "Правил блокировки: ${shield.ruleCount()}"
+  )
+  dialogBuilder().setTitle("V&R Shield · защита").setItems(choices) { _,which ->
+   when(which) {
+    0->dialogBuilder().setTitle("Режим защиты")
+      .setSingleChoiceItems(modes,shield.mode()) { dialog,index ->
+       shield.setMode(index); dialog.dismiss(); showShield()
+      }.setNegativeButton("Отмена",null).show()
+    1->{
+     val names=sources.map{it.name}.toTypedArray()
+     val enabled=BooleanArray(sources.size){shield.sourceEnabled(sources[it].id)}
+     dialogBuilder().setTitle("Источники блокировки").setMultiChoiceItems(names,enabled) { _,index,on ->
+      shield.setSourceEnabled(sources[index].id,on)
+     }.setPositiveButton("Готово"){_,_->showShield()}.show()
+    }
+    2->{
+     try { adFilter.viewModel.filters.value?.values?.forEach { adFilter.viewModel.download(it.id) } }
+     catch(_:Throwable) {}
+     shield.updateNow { result -> if(!isFinishing)alert("Обновление источников",result) }
+     Toast.makeText(this,"Обновление запущено",Toast.LENGTH_SHORT).show()
+    }
+    3->{
+     val input=EditText(this).apply { setText(shield.exclusions()); hint="example.com, другой-сайт.ru" }
+     dialogBuilder().setTitle("Разрешённые домены").setView(input)
+      .setPositiveButton("Сохранить"){_,_->shield.setExclusions(input.text.toString())}
+      .setNegativeButton("Отмена",null).show()
+    }
+    else->alert("V&R Shield","Активно ${shield.ruleCount()} доменных правил. Дополнительные правила AdFilter учитываются отдельно.")
    }
-   .setNeutralButton("Исключения") { _,_ -> val input=EditText(this).apply { setText(shield.exclusions()); hint="example.com, другой-сайт.ru" }; dialogBuilder().setTitle("Сайты без блокировки").setView(input).setPositiveButton("Сохранить") { _,_ -> shield.setExclusions(input.text.toString()) }.setNegativeButton("Отмена",null).show() }
-   .setNegativeButton("Закрыть",null).show()
+  }.setNegativeButton("Закрыть",null).show()
  }
  private fun dialogBuilder(): AlertDialog.Builder = AlertDialog.Builder(this, R.style.VRDialog)
  private fun alert(title:String,msg:String) { dialogBuilder().setTitle(title).setMessage(msg).setPositiveButton("OK",null).show() }
