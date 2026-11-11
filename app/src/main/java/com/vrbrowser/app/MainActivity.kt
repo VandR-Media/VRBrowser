@@ -40,7 +40,8 @@ class MainActivity : Activity() {
  private val filterDirtyObserver = Observer<None> {
   runOnUiThread {
    tabs.forEach { it.clearCache(false) }
-   if(tabs.isNotEmpty())status.text="Фильтры рекламы обновлены · перезагрузи страницу"
+   if(::status.isInitialized && tabs.isNotEmpty())
+    status.text="Фильтры рекламы обновлены · перезагрузи страницу"
   }
  }
  private val prefs by lazy { getSharedPreferences("browser", MODE_PRIVATE) }
@@ -55,7 +56,14 @@ class MainActivity : Activity() {
   text = icon; textSize = 23f; gravity = Gravity.CENTER
   setTextColor(if(description == "Медиа" || description == "Новая вкладка") neonPink else neonBlue)
   contentDescription = description
-  background = rounded(surface, 15)
+  background = GradientDrawable(GradientDrawable.Orientation.TL_BR,intArrayOf(
+   Color.rgb(28,42,66),Color.rgb(20,26,44)
+  )).apply {
+   cornerRadius=dp(18).toFloat()
+   setStroke(dp(1),if(description=="Медиа"||description=="Новая вкладка")
+    Color.rgb(100,52,109) else Color.rgb(43,79,108))
+  }
+  elevation=dp(2).toFloat()
   setOnClickListener { action() }
  }
  private fun row(): LinearLayout = LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL }
@@ -93,7 +101,7 @@ class MainActivity : Activity() {
   status=TextView(this).apply { setTextColor(Color.rgb(156,171,192)); textSize=10f; text="Готов"; setPadding(dp(12),dp(2),0,dp(3)) }; root.addView(status)
   val bottom=row().apply { setPadding(dp(5),dp(5),dp(5),dp(8)); gravity=Gravity.CENTER_VERTICAL }
   root.addView(bottom)
-  listOf("‹","›","+","▣","★","♫","⋮").forEachIndexed { i,s ->
+  listOf("‹","›","✚","▣","★","♫","⋮").forEachIndexed { i,s ->
    val action: () -> Unit = when(i) { 0->{ { active().takeIf{it.canGoBack()}?.goBack() } }; 1->{ { active().takeIf{it.canGoForward()}?.goForward() } }; 2->{ { addTab("https://www.google.com") } }; 3->{ { showTabs() } }; 4->{ { showBookmarks() } }; 5->{ { showMedia() } }; else->{ { showMenu() } } }
    val descriptions = listOf("Назад", "Вперёд", "Новая вкладка", "Вкладки", "Закладки", "Медиа", "Меню")
    val lp=LinearLayout.LayoutParams(0,dp(46),1f).apply { setMargins(dp(2),0,dp(2),0) }
@@ -538,5 +546,9 @@ class MainActivity : Activity() {
  private fun dialogBuilder(): AlertDialog.Builder = AlertDialog.Builder(this, R.style.VRDialog)
  private fun alert(title:String,msg:String) { dialogBuilder().setTitle(title).setMessage(msg).setPositiveButton("OK",null).show() }
  override fun onBackPressed() { if(active().canGoBack())active().goBack() else super.onBackPressed() }
- override fun onDestroy() { adFilter.viewModel.onDirty.removeObserver(filterDirtyObserver); tabs.forEach { it.destroy() }; super.onDestroy() }
+ override fun onDestroy() {
+  try{adFilter.viewModel.onDirty.removeObserver(filterDirtyObserver)}catch(_:Throwable){}
+  tabs.forEach { try{it.destroy()}catch(_:Throwable){} }
+  super.onDestroy()
+ }
 }
