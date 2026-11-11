@@ -36,7 +36,7 @@ object HlsDownloader {
  private fun isDeleted(c:Context,id:String)=state(c,id)=="Удалено"
  private fun isStopped(c:Context,id:String)=isPaused(c,id)||isDeleted(c,id)
  fun onNetworkLost(){connections.values.forEach{try{it.disconnect()}catch(_:Exception){}}}
- fun start(context:Context,id:String,callback:(String)->Unit={}){paused.remove(id);if(!running.add(id)){restartRequested.add(id);return};val app=context.applicationContext;pool.execute{try{perform(app,id,callback)}finally{running.remove(id);if(restartRequested.remove(id)&&TransferStore.state(app,id)=="Подготовка")start(app,id,callback)}}}
+ fun start(context:Context,id:String,callback:(String)->Unit={}){if(!running.add(id)){restartRequested.add(id);return};paused.remove(id);val app=context.applicationContext;pool.execute{try{perform(app,id,callback)}finally{running.remove(id);if(restartRequested.remove(id)&&TransferStore.state(app,id)=="Подготовка")start(app,id,callback)}}}
  fun pause(context:Context,id:String){paused.add(id);TransferStore.setState(context,id,"Пауза");connections.remove(id)?.disconnect()}
  fun delete(context:Context,id:String){paused.add(id);TransferStore.setState(context,id,"Удалено");connections.remove(id)?.disconnect();if(!running.contains(id))cleanup(context,id)}
  private fun cleanup(c:Context,id:String){val item=TransferStore.entries(c).firstOrNull{it.id==id};try{item?.uri?.takeIf{it.isNotBlank()}?.let{c.contentResolver.delete(Uri.parse(it),null,null)}}catch(_:Exception){};File(c.filesDir,"hls_${id}").deleteRecursively();File(c.filesDir,"direct_${id}.part").delete();File(c.filesDir,"direct_${id}.meta").delete();TransferStore.remove(c,id)}
