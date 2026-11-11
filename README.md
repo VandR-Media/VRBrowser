@@ -10,7 +10,7 @@ Android browser for Huawei / Android devices. Kotlin, WebView and Media3.
 - HLS downloads are assembled from resumable MPEG-TS segments and then remuxed/transformed to MP4 with Media3 Transformer. The selected destination is always a .mp4 file for supported HLS inputs.
 - A floating V&R Player shortcut appears when an HLS stream is detected on the page.
 - The native Media3 player receives the page Referer, WebView User-Agent and cookies. Its controls include separate quality and audio-track menus when the source exposes those tracks.
-- Ad filtering now uses an ABP-compatible engine with AdGuard Base, EasyPrivacy Lite and AdGuard Tracking Protection subscriptions, alongside the existing host-level blocker. The AdblockAndroid dependency is pinned to commit a585487eb19328f635a5b7b983fa38d4c97f2bc8 and is licensed under LGPL-2.1.
+- Ad filtering now uses an ABP-compatible engine with AdGuard Base, EasyPrivacy Lite and AdGuard Tracking Protection subscriptions, alongside the existing host-level blocker. The AdblockAndroid dependency is pinned to commit a585487eb19328f635a5b7b983fa38d4c97f2bc8 (pinned JitPack build revision a585487eb1) and is licensed under LGPL-2.1.
 
 ## HLS and media limitations
 
