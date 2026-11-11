@@ -166,7 +166,7 @@ class MainActivity : Activity() {
     super.onPageStarted(v,url,favicon)
    }
    override fun shouldOverrideUrlLoading(v:WebView?,r:WebResourceRequest?):Boolean { val u=r?.url ?:return false; return if(u.scheme=="http"||u.scheme=="https") false else { try { startActivity(Intent(Intent.ACTION_VIEW,u)) } catch (_:Exception){}; true } }
-   override fun onPageFinished(v:WebView?,url:String?) { if(v==active()) { address.setText(url); status.text="Готов · найдено медиа: ${media.size}"; if(synchronized(detected){detected.any{it.contains(".m3u8",true)}}){playerButton.visibility=View.VISIBLE;playerButton.bringToFront()} }; if(url?.startsWith("https://")==true) { val h=history; h.remove(url); h.add(url); writeList("history",h) }; scanPage(v) }
+   override fun onPageFinished(v:WebView?,url:String?) { if(v==active()) { address.setText(url); status.text="Готов · найдено медиа: ${(media+detected).size}"; if(synchronized(detected){detected.any{it.contains(".m3u8",true)}}){playerButton.visibility=View.VISIBLE;playerButton.bringToFront()} }; if(url?.startsWith("https://")==true) { val h=history; h.remove(url); h.add(url); writeList("history",h) }; scanPage(v) }
    override fun onRenderProcessGone(view:WebView?,detail:RenderProcessGoneDetail?):Boolean {
     val failed=view ?: return true
     val failedUrl=failed.url?.takeIf{it.startsWith("http://")||it.startsWith("https://")} ?: "https://www.google.com"
@@ -226,7 +226,7 @@ class MainActivity : Activity() {
     }.firstOrNull() ?: return false
     hasFullVideoHls(java.net.URL(java.net.URL(url),child).toString(),referer,userAgent,depth+1)
    } else {
-    val duration=Regex("""#EXTINF:([0-9]+(?:\\.[0-9]+)?)""").findAll(content)
+    val duration=Regex("""#EXTINF:([0-9]+(?:\.[0-9]+)?)""").findAll(content)
      .sumOf{it.groupValues[1].toDoubleOrNull() ?: 0.0}
     duration>=120.0
    }
@@ -304,7 +304,7 @@ class MainActivity : Activity() {
     val decoded=JSONArray("[$raw]").getString(0)
     val arr=JSONArray(decoded)
     for(i in 0 until arr.length()) media.add(arr.getString(i))
-    status.text="Готов · найдено медиа: ${media.size}"
+    status.text="Готов · найдено медиа: ${(media+detected).size}"
    } catch (_:Exception) { }
   }
  }
